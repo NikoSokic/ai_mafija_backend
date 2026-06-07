@@ -34,6 +34,6 @@ public class GameState {
 
     @OneToOne
     @JoinColumn(name = "lobby_id", nullable = false)
-    private Lobby Lobby;
+    private Lobby lobby;
 
 }
