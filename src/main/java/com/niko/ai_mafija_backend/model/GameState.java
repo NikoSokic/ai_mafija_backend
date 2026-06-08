@@ -36,4 +36,6 @@ public class GameState {
     @JoinColumn(name = "lobby_id", nullable = false)
     private Lobby lobby;
 
+    @Column(name = "tie_break_player_ids")
+    private String tieBreakPlayerIds;
 }

@@ -37,7 +37,7 @@ public class GameAction {
 
     @ManyToOne
     @JoinColumn(name = "lobby_id", nullable = false)
-    private Lobby Lobby;
+    private Lobby lobby;
 
     @ManyToOne
     @JoinColumn(name = "target_player_id")

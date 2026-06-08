@@ -11,4 +11,5 @@ public interface PlayerRepository extends JpaRepository<Player, Long> {
     long countByLobby(Lobby lobby);
     List<Player> findByLobby(Lobby lobby);
     boolean existsByLobbyAndNicknameIgnoreCase(Lobby lobby, String nickname);
+    List<Player> findByLobbyAndIsAliveTrue(Lobby lobby);
 }

@@ -17,7 +17,7 @@ public class Vote {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long Id;
+    private Long id;
 
     @Column(name = "round_number")
     private Integer roundNumber;
@@ -36,4 +36,7 @@ public class Vote {
     @ManyToOne
     @JoinColumn(name = "target_player_id")
     private Player targetPlayer;
+
+    @Column(name = "phase")
+    private String phase;
 }

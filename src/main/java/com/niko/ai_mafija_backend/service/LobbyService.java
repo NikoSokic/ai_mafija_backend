@@ -140,7 +140,10 @@ public class LobbyService {
         }
 
         lobby.setStatus("IN_PROGRESS");
+        lobby.setStartedAt(OffsetDateTime.now());
+
         lobbyRepository.save(lobby);
+
 
         GameState gameState = new GameState();
         gameState.setLobby(lobby);
