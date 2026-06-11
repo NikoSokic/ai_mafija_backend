@@ -43,4 +43,9 @@ public class GameAction {
     @JoinColumn(name = "target_player_id")
     private Player targetPlayer;
 
+    @ManyToOne
+    @JoinColumn(name = "second_target_player_id")
+    private Player secondTargetPlayer;
+
+
 }

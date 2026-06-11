@@ -1,4 +1,4 @@
-package com.niko.ai_mafija_backend.dto;
+package com.niko.ai_mafija_backend.dto.Response;
 
 import lombok.AllArgsConstructor;
 import lombok.Getter;
@@ -9,12 +9,11 @@ import java.util.List;
 @Getter
 @Setter
 @AllArgsConstructor
-public class ResolveVoteResponse {
+public class ResolveNightResponse {
 
-    private String result;
     private String message;
+    private String phase;
     private Integer roundNumber;
-
-    private Long eliminatedPlayerId;
-    private List<Long> tiedPlayerIds;
+    private List<Long> killedPlayerIds;
+    private List<Long> silencedPlayerIds;
 }

@@ -1,4 +1,4 @@
-package com.niko.ai_mafija_backend.dto;
+package com.niko.ai_mafija_backend.dto.Response;
 
 import lombok.AllArgsConstructor;
 import lombok.Getter;
@@ -13,4 +13,7 @@ public class VoteResponse {
     private Long voterPlayerId;
     private Long targetPlayerId;
     private String message;
+
+    private boolean votingResolved;
+    private ResolveVoteResponse resolveResult;
 }

@@ -1,6 +1,10 @@
 package com.niko.ai_mafija_backend.service;
 
-import com.niko.ai_mafija_backend.dto.*;
+import com.niko.ai_mafija_backend.dto.Requests.CreateLobbyRequest;
+import com.niko.ai_mafija_backend.dto.Requests.LobbyRoleRequest;
+import com.niko.ai_mafija_backend.dto.Response.CreateLobbyResponse;
+import com.niko.ai_mafija_backend.dto.Response.LobbyDetailsResponse;
+import com.niko.ai_mafija_backend.dto.Response.LobbyPlayerResponse;
 import com.niko.ai_mafija_backend.model.Lobby;
 import com.niko.ai_mafija_backend.model.LobbyRole;
 import com.niko.ai_mafija_backend.model.Role;
@@ -150,6 +154,7 @@ public class LobbyService {
         gameState.setPhase("NIGHT");
         gameState.setRoundNumber(1);
         gameState.setUpdateAt(OffsetDateTime.now());
+        gameState.setCurrentTurnRole("MAFIA");
 
         gameStateRepository.save(gameState);
     }

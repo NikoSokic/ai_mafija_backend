@@ -1,8 +1,8 @@
 package com.niko.ai_mafija_backend.controller;
 
-import com.niko.ai_mafija_backend.dto.ActionRequest;
-import com.niko.ai_mafija_backend.dto.ActionResponse;
-import com.niko.ai_mafija_backend.dto.ResolveNightResponse;
+import com.niko.ai_mafija_backend.dto.Requests.ActionRequest;
+import com.niko.ai_mafija_backend.dto.Response.ActionResponse;
+import com.niko.ai_mafija_backend.dto.Response.ResolveNightResponse;
 import com.niko.ai_mafija_backend.service.ActionService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;

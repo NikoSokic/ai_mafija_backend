@@ -1,12 +1,16 @@
 package com.niko.ai_mafija_backend.controller;
 
-import com.niko.ai_mafija_backend.dto.*;
+import com.niko.ai_mafija_backend.dto.Requests.CreateLobbyRequest;
+import com.niko.ai_mafija_backend.dto.Requests.JoinLobbyRequest;
+import com.niko.ai_mafija_backend.dto.Response.CreateLobbyResponse;
+import com.niko.ai_mafija_backend.dto.Response.JoinLobbyResponse;
+import com.niko.ai_mafija_backend.dto.Response.LobbyDetailsResponse;
+import com.niko.ai_mafija_backend.dto.Response.LobbyPlayerResponse;
 import com.niko.ai_mafija_backend.service.LobbyService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-import com.niko.ai_mafija_backend.model.Player;
 import com.niko.ai_mafija_backend.service.PlayerService;
 
 import java.util.List;

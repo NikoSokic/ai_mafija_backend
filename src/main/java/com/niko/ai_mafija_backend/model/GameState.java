@@ -28,9 +28,8 @@ public class GameState {
     @Column(name = "updated_at")
     private OffsetDateTime updateAt;
 
-    @ManyToOne
-    @JoinColumn(name = "current_turn_player_id")
-    private Player currentTurnPlayer;
+    @Column(name = "current_turn_role")
+    private String currentTurnRole;
 
     @OneToOne
     @JoinColumn(name = "lobby_id", nullable = false)

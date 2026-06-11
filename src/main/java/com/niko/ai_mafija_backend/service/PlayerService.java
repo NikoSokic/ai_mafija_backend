@@ -1,9 +1,9 @@
 package com.niko.ai_mafija_backend.service;
 
-import com.niko.ai_mafija_backend.dto.JoinLobbyRequest;
-import com.niko.ai_mafija_backend.dto.JoinLobbyResponse;
-import com.niko.ai_mafija_backend.dto.LobbyPlayerResponse;
-import com.niko.ai_mafija_backend.dto.PlayerRoleResponse;
+import com.niko.ai_mafija_backend.dto.Requests.JoinLobbyRequest;
+import com.niko.ai_mafija_backend.dto.Response.JoinLobbyResponse;
+import com.niko.ai_mafija_backend.dto.Response.LobbyPlayerResponse;
+import com.niko.ai_mafija_backend.dto.Response.PlayerRoleResponse;
 import com.niko.ai_mafija_backend.model.Lobby;
 import com.niko.ai_mafija_backend.model.Player;
 import com.niko.ai_mafija_backend.repository.LobbyRepository;

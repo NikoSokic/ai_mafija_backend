@@ -1,4 +1,4 @@
-package com.niko.ai_mafija_backend.dto;
+package com.niko.ai_mafija_backend.dto.Requests;
 
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;

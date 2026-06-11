@@ -1,4 +1,4 @@
-package com.niko.ai_mafija_backend.dto;
+package com.niko.ai_mafija_backend.dto.Response;
 
 import lombok.AllArgsConstructor;
 import lombok.Getter;

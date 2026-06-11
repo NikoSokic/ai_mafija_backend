@@ -1,7 +1,7 @@
 package com.niko.ai_mafija_backend.service;
 
-import com.niko.ai_mafija_backend.dto.VoteRequest;
-import com.niko.ai_mafija_backend.dto.VoteResponse;
+import com.niko.ai_mafija_backend.dto.Requests.VoteRequest;
+import com.niko.ai_mafija_backend.dto.Response.VoteResponse;
 import com.niko.ai_mafija_backend.model.GameState;
 import com.niko.ai_mafija_backend.model.Player;
 import com.niko.ai_mafija_backend.model.Vote;
@@ -11,12 +11,10 @@ import com.niko.ai_mafija_backend.repository.PlayerRepository;
 import com.niko.ai_mafija_backend.repository.VoteRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
-import com.niko.ai_mafija_backend.dto.ResolveVoteResponse;
+import com.niko.ai_mafija_backend.dto.Response.ResolveVoteResponse;
 import com.niko.ai_mafija_backend.model.Lobby;
-import com.niko.ai_mafija_backend.repository.LobbyRepository;
 
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -96,11 +94,26 @@ public class VoteService {
 
         Vote savedVote = voteRepository.save(vote);
 
+        if (haveAllRequiredPlayersVoted(voter.getLobby(), gameState)) {
+            ResolveVoteResponse resolveResult = resolveVote(voter.getLobby().getCode());
+
+            return new VoteResponse(
+                    savedVote.getId(),
+                    savedVote.getVoterPlayer().getId(),
+                    savedVote.getTargetPlayer().getId(),
+                    "Glas je spremljen. Svi potrebni igrači su glasali, glasanje je automatski obrađeno.",
+                    true,
+                    resolveResult
+            );
+        }
+
         return new VoteResponse(
                 savedVote.getId(),
                 savedVote.getVoterPlayer().getId(),
                 savedVote.getTargetPlayer().getId(),
-                "Glas je spremljen."
+                "Glas je spremljen.",
+                false,
+                null
         );
     }
 
@@ -112,8 +125,8 @@ public class VoteService {
         GameState gameState = gameStateRepository.findByLobby(lobby)
                 .orElseThrow(() -> new RuntimeException("Game state ne postoji."));
 
-        if (!gameState.getPhase().equals("DAY")) {
-            throw new RuntimeException("Glasanje se može obraditi samo tijekom DAY faze.");
+        if (!gameState.getPhase().equals("DAY") && !gameState.getPhase().equals("TIE_BREAK")) {
+            throw new RuntimeException("Glasanje se može obraditi samo tijekom DAY ili TIE_BREAK faze.");
         }
 
         List<Vote> votes = voteRepository.findByLobbyAndRoundNumberAndPhase(
@@ -164,6 +177,7 @@ public class VoteService {
             }
 
             gameState.setPhase("NIGHT");
+            gameState.setCurrentTurnRole("MAFIA");
             gameState.setRoundNumber(gameState.getRoundNumber() + 1);
             gameState.setTieBreakPlayerIds(null);
             gameState.setUpdateAt(OffsetDateTime.now());
@@ -198,6 +212,7 @@ public class VoteService {
         }
 
         gameState.setPhase("NIGHT");
+        gameState.setCurrentTurnRole("MAFIA");
         gameState.setRoundNumber(gameState.getRoundNumber() + 1);
         gameState.setUpdateAt(OffsetDateTime.now());
         gameStateRepository.save(gameState);
@@ -210,6 +225,7 @@ public class VoteService {
                 new ArrayList<>()
         );
     }
+
     private String checkWinCondition(Lobby lobby) {
         List<Player> alivePlayers = playerRepository.findByLobbyAndIsAliveTrue(lobby);
 
@@ -232,6 +248,7 @@ public class VoteService {
 
         return null;
     }
+
     private void finishGame(Lobby lobby, GameState gameState) {
         lobby.setStatus("FINISHED");
         lobby.setEndedAt(OffsetDateTime.now());
@@ -259,5 +276,36 @@ public class VoteService {
                 .map(Long::parseLong)
                 .toList();
     }
+    private boolean haveAllRequiredPlayersVoted(Lobby lobby, GameState gameState) {
 
+        List<Player> alivePlayers = playerRepository.findByLobbyAndIsAliveTrue(lobby);
+
+        List<Long> requiredVoterIds;
+
+        if (gameState.getPhase().equals("TIE_BREAK")) {
+            List<Long> tiedPlayerIds = parseTiedPlayerIds(gameState.getTieBreakPlayerIds());
+
+            requiredVoterIds = alivePlayers.stream()
+                    .map(Player::getId)
+                    .filter(playerId -> !tiedPlayerIds.contains(playerId))
+                    .toList();
+        } else {
+            requiredVoterIds = alivePlayers.stream()
+                    .map(Player::getId)
+                    .toList();
+        }
+
+        List<Vote> votes = voteRepository.findByLobbyAndRoundNumberAndPhase(
+                lobby,
+                gameState.getRoundNumber(),
+                gameState.getPhase()
+        );
+
+        List<Long> votedPlayerIds = votes.stream()
+                .map(vote -> vote.getVoterPlayer().getId())
+                .distinct()
+                .toList();
+
+        return votedPlayerIds.containsAll(requiredVoterIds);
+    }
 }

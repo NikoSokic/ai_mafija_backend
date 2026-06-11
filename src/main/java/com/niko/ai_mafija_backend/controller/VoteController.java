@@ -1,8 +1,8 @@
 package com.niko.ai_mafija_backend.controller;
 
-import com.niko.ai_mafija_backend.dto.ResolveVoteResponse;
-import com.niko.ai_mafija_backend.dto.VoteRequest;
-import com.niko.ai_mafija_backend.dto.VoteResponse;
+import com.niko.ai_mafija_backend.dto.Response.ResolveVoteResponse;
+import com.niko.ai_mafija_backend.dto.Requests.VoteRequest;
+import com.niko.ai_mafija_backend.dto.Response.VoteResponse;
 import com.niko.ai_mafija_backend.service.VoteService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
