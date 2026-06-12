@@ -21,10 +21,7 @@ import com.niko.ai_mafija_backend.repository.GameStateRepository;
 
 
 import java.time.OffsetDateTime;
-import java.util.Random;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
+import java.util.*;
 
 @Service
 @RequiredArgsConstructor
@@ -35,6 +32,8 @@ public class LobbyService {
     private final LobbyRoleRepository lobbyRoleRepository;
     private final PlayerRepository playerRepository;
     private final GameStateRepository gameStateRepository;
+    private final WebSocketService webSocketService;
+
     public CreateLobbyResponse createLobby(CreateLobbyRequest request) {
 
         int totalRoles = request.getRoles()
@@ -61,6 +60,7 @@ public class LobbyService {
                 .isHost(true)
                 .isAlive(true)
                 .joinedAt(OffsetDateTime.now())
+                .playerToken(UUID.randomUUID().toString())
                 .build();
 
         Player savedHostPlayer = playerRepository.save(hostPlayer);
@@ -88,7 +88,8 @@ public class LobbyService {
                 savedLobby.getStatus(),
                 savedLobby.getMaxPlayers(),
                 savedHostPlayer.getId(),
-                savedHostPlayer.getNickname()
+                savedHostPlayer.getNickname(),
+                savedHostPlayer.getPlayerToken()
         );
     }
 
@@ -148,6 +149,12 @@ public class LobbyService {
 
         lobbyRepository.save(lobby);
 
+        webSocketService.sendLobbyEvent(
+                lobby.getCode(),
+                "GAME_STARTED",
+                "Igra je započela.",
+                null
+        );
 
         GameState gameState = new GameState();
         gameState.setLobby(lobby);

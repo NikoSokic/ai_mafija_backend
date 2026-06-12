@@ -28,11 +28,18 @@ public class VoteService {
     private final GameStateRepository gameStateRepository;
     private final VoteRepository voteRepository;
     private final LobbyRepository lobbyRepository;
+    private final PlayerAuthService playerAuthService;
 
     public VoteResponse submitVote(VoteRequest request) {
 
-        Player voter = playerRepository.findById(request.getVoterPlayerId())
-                .orElseThrow(() -> new RuntimeException("Igrač koji glasa ne postoji."));
+        Player voter = playerAuthService.authenticate(
+                request.getVoterPlayerId(),
+                request.getPlayerToken()
+        );
+
+        if (request.getTargetPlayerId() == null) {
+            throw new RuntimeException("Meta glasa je obavezna.");
+        }
 
         Player target = playerRepository.findById(request.getTargetPlayerId())
                 .orElseThrow(() -> new RuntimeException("Igrač za kojeg se glasa ne postoji."));
@@ -276,6 +283,7 @@ public class VoteService {
                 .map(Long::parseLong)
                 .toList();
     }
+
     private boolean haveAllRequiredPlayersVoted(Lobby lobby, GameState gameState) {
 
         List<Player> alivePlayers = playerRepository.findByLobbyAndIsAliveTrue(lobby);

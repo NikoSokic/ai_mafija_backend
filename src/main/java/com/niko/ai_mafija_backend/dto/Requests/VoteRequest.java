@@ -9,4 +9,6 @@ public class VoteRequest {
 
     private Long voterPlayerId;
     private Long targetPlayerId;
+
+    private String playerToken;
 }

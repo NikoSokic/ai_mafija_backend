@@ -13,4 +13,6 @@ public class ActionRequest {
     private String actionType;
     private Long secondTargetPlayerId;
 
+    private String playerToken;
+
 }

@@ -29,11 +29,18 @@ public class ActionService {
     private final PlayerRepository playerRepository;
     private final GameStateRepository gameStateRepository;
     private final GameActionRepository gameActionRepository;
+    private final PlayerAuthService playerAuthService;
 
     public ActionResponse submitAction(ActionRequest request) {
 
-        Player player = playerRepository.findById(request.getPlayerId())
-                .orElseThrow(() -> new RuntimeException("Igrač ne postoji."));
+        Player player = playerAuthService.authenticate(
+                request.getPlayerId(),
+                request.getPlayerToken()
+        );
+
+        if (request.getTargetPlayerId() == null) {
+            throw new RuntimeException("Meta je obavezna za akciju.");
+        }
 
         Player targetPlayer = playerRepository.findById(request.getTargetPlayerId())
                 .orElseThrow(() -> new RuntimeException("Meta ne postoji."));
@@ -576,4 +583,6 @@ public class ActionService {
         return roleName.equalsIgnoreCase("Mafia")
                 || roleName.equalsIgnoreCase("Dama");
     }
+
+
 }

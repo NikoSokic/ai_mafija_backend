@@ -37,4 +37,7 @@ public class Player {
     @JoinColumn(name = "role_id")
     private Role role;
 
+    @Column(name = "player_token", unique = true)
+    private String playerToken;
+
 }

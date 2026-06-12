@@ -16,4 +16,6 @@ public class CreateLobbyResponse {
 
     private Long hostPlayerId;
     private String hostNickname;
+
+    private String playerToken;
 }

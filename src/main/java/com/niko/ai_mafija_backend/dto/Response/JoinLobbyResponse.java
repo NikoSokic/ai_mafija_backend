@@ -15,4 +15,5 @@ public class JoinLobbyResponse {
 
     private Long lobbyId;
     private String lobbyCode;
-}
+
+    private String playerToken;}
