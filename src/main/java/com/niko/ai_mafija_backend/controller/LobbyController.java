@@ -2,6 +2,8 @@ package com.niko.ai_mafija_backend.controller;
 
 import com.niko.ai_mafija_backend.dto.Requests.CreateLobbyRequest;
 import com.niko.ai_mafija_backend.dto.Requests.JoinLobbyRequest;
+import com.niko.ai_mafija_backend.dto.Requests.HostActionRequest;
+import com.niko.ai_mafija_backend.dto.Response.GameStateResponse;
 import com.niko.ai_mafija_backend.dto.Response.CreateLobbyResponse;
 import com.niko.ai_mafija_backend.dto.Response.JoinLobbyResponse;
 import com.niko.ai_mafija_backend.dto.Response.LobbyDetailsResponse;
@@ -12,6 +14,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import com.niko.ai_mafija_backend.service.PlayerService;
+import com.niko.ai_mafija_backend.service.GameStateService;
 
 import java.util.List;
 
@@ -23,9 +26,10 @@ public class LobbyController {
 
     private final LobbyService lobbyService;
     private final PlayerService playerService;
+    private final GameStateService gameStateService;
 
     @PostMapping
-    public ResponseEntity<CreateLobbyResponse> createLobby(@RequestBody CreateLobbyRequest request) {
+    public ResponseEntity<CreateLobbyResponse> createLobby(@Valid @RequestBody CreateLobbyRequest request) {
         return ResponseEntity.ok(lobbyService.createLobby(request));
     }
 
@@ -43,9 +47,19 @@ public class LobbyController {
     }
 
     @PostMapping("/{code}/start")
-    public ResponseEntity<Void> startLobby(@PathVariable String code) {
-        lobbyService.startLobby(code);
+    public ResponseEntity<Void> startLobby(
+            @PathVariable String code,
+            @Valid @RequestBody HostActionRequest request) {
+        lobbyService.startLobby(code, request);
         return ResponseEntity.ok().build();
+    }
+
+    @GetMapping("/{code}/game-state")
+    public ResponseEntity<GameStateResponse> getGameState(
+            @PathVariable String code,
+            @RequestHeader("X-Player-Id") Long playerId,
+            @RequestHeader("X-Player-Token") String playerToken) {
+        return ResponseEntity.ok(gameStateService.getGameState(code, playerId, playerToken));
     }
 
     @GetMapping("/{code}")

@@ -7,6 +7,9 @@ import com.niko.ai_mafija_backend.dto.Response.JoinLobbyResponse;
 import com.niko.ai_mafija_backend.dto.Response.LobbyPlayerResponse;
 import com.niko.ai_mafija_backend.dto.Response.PlayerRoleResponse;
 import com.niko.ai_mafija_backend.dto.Response.ReconnectResponse;
+import com.niko.ai_mafija_backend.dto.Response.CurrentPlayerGameStateResponse;
+import com.niko.ai_mafija_backend.exception.ConflictException;
+import com.niko.ai_mafija_backend.exception.ResourceNotFoundException;
 import com.niko.ai_mafija_backend.model.GameState;
 import com.niko.ai_mafija_backend.model.Lobby;
 import com.niko.ai_mafija_backend.model.Player;
@@ -14,6 +17,7 @@ import com.niko.ai_mafija_backend.repository.GameStateRepository;
 import com.niko.ai_mafija_backend.repository.LobbyRepository;
 import com.niko.ai_mafija_backend.repository.PlayerRepository;
 import lombok.RequiredArgsConstructor;
+import jakarta.transaction.Transactional;
 import org.springframework.stereotype.Service;
 
 import java.time.OffsetDateTime;
@@ -29,24 +33,26 @@ public class PlayerService {
     private final PlayerAuthService playerAuthService;
     private final GameStateRepository gameStateRepository;
     private final WebSocketService webSocketService;
+    private final GameStateService gameStateService;
 
+    @Transactional
     public JoinLobbyResponse joinLobby(String code, JoinLobbyRequest request) {
 
         Lobby lobby = lobbyRepository.findByCode(code)
-                .orElseThrow(() -> new RuntimeException("Lobby ne postoji."));
+                .orElseThrow(() -> new ResourceNotFoundException("Lobby ne postoji."));
 
         if (!lobby.getStatus().equals("WAITING")) {
-            throw new RuntimeException("Igra je već započela ili završena.");
+            throw new ConflictException("Igra je već započela ili završena.");
         }
 
         if (playerRepository.existsByLobbyAndNicknameIgnoreCase(lobby, request.getNickname())) {
-            throw new RuntimeException("Igrač s tim nicknameom već postoji u lobbyju.");
+            throw new ConflictException("Igrač s tim nicknameom već postoji u lobbyju.");
         }
 
         long currentPlayers = playerRepository.countByLobby(lobby);
 
         if (currentPlayers >= lobby.getMaxPlayers()) {
-            throw new RuntimeException("Lobby je popunjen.");
+            throw new ConflictException("Lobby je popunjen.");
         }
 
         Player player = Player.builder()
@@ -60,9 +66,7 @@ public class PlayerService {
 
         Player savedPlayer = playerRepository.save(player);
 
-        System.out.println("SALJEM WS PLAYER_JOINED ZA LOBBY: " + lobby.getCode());
-
-        webSocketService.sendLobbyEvent(
+        webSocketService.publishLobbyEventAfterCommit(
                 lobby.getCode(),
                 "PLAYER_JOINED",
                 "Novi igrač se pridružio lobbyju.",
@@ -72,6 +76,7 @@ public class PlayerService {
                         savedPlayer.getIsAlive()
                 )
         );
+        webSocketService.publishGameStateChangedAfterCommit(lobby.getCode());
 
         return new JoinLobbyResponse(
                 savedPlayer.getId(),
@@ -86,7 +91,7 @@ public class PlayerService {
     public List<LobbyPlayerResponse> getPlayersByLobby(String code) {
 
         Lobby lobby = lobbyRepository.findByCode(code)
-                .orElseThrow(() -> new RuntimeException("Lobby ne postoji."));
+                .orElseThrow(() -> new ResourceNotFoundException("Lobby ne postoji."));
 
         List<Player> players = playerRepository.findByLobby(lobby);
 
@@ -107,7 +112,7 @@ public class PlayerService {
         );
 
         if (player.getRole() == null) {
-            throw new RuntimeException("Uloga još nije dodijeljena");
+            throw new ConflictException("Uloga još nije dodijeljena.");
         }
 
         return new PlayerRoleResponse(
@@ -145,6 +150,8 @@ public class PlayerService {
                 ? gameState.getCurrentTurnRole()
                 : null;
 
+        CurrentPlayerGameStateResponse playerState = gameStateService.getCurrentPlayerState(player, gameState);
+
         return new ReconnectResponse(
                 true,
                 player.getId(),
@@ -157,7 +164,10 @@ public class PlayerService {
                 roleName,
                 phase,
                 roundNumber,
-                currentTurnRole
+                currentTurnRole,
+                playerState.canAct(),
+                playerState.hasActed(),
+                playerState.availableActions()
         );
     }
 

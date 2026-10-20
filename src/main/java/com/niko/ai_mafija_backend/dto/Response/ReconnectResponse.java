@@ -4,6 +4,8 @@ import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.Setter;
 
+import java.util.List;
+
 @Getter
 @Setter
 @AllArgsConstructor
@@ -26,4 +28,8 @@ public class ReconnectResponse {
     private String phase;
     private Integer roundNumber;
     private String currentTurnRole;
+
+    private Boolean canAct;
+    private Boolean hasActed;
+    private List<AvailableActionResponse> availableActions;
 }

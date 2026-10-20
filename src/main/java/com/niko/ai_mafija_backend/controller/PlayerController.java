@@ -5,6 +5,7 @@ import com.niko.ai_mafija_backend.dto.Requests.ReconnectRequest;
 import com.niko.ai_mafija_backend.dto.Response.PlayerRoleResponse;
 import com.niko.ai_mafija_backend.dto.Response.ReconnectResponse;
 import com.niko.ai_mafija_backend.service.PlayerService;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -22,7 +23,7 @@ public class PlayerController {
     }
 
     @PostMapping("/reconnect")
-    public ResponseEntity<ReconnectResponse> reconnect(@RequestBody ReconnectRequest request) {
+    public ResponseEntity<ReconnectResponse> reconnect(@Valid @RequestBody ReconnectRequest request) {
         return ResponseEntity.ok(playerService.reconnect(request));
     }
 }

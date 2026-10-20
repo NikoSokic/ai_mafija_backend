@@ -1,7 +1,12 @@
 package com.niko.ai_mafija_backend.service;
 
 import com.niko.ai_mafija_backend.dto.Requests.VoteRequest;
+import com.niko.ai_mafija_backend.dto.Requests.HostActionRequest;
 import com.niko.ai_mafija_backend.dto.Response.VoteResponse;
+import com.niko.ai_mafija_backend.exception.BadRequestException;
+import com.niko.ai_mafija_backend.exception.ConflictException;
+import com.niko.ai_mafija_backend.exception.ForbiddenException;
+import com.niko.ai_mafija_backend.exception.ResourceNotFoundException;
 import com.niko.ai_mafija_backend.model.GameState;
 import com.niko.ai_mafija_backend.model.Player;
 import com.niko.ai_mafija_backend.model.Vote;
@@ -9,7 +14,9 @@ import com.niko.ai_mafija_backend.repository.GameStateRepository;
 import com.niko.ai_mafija_backend.repository.LobbyRepository;
 import com.niko.ai_mafija_backend.repository.PlayerRepository;
 import com.niko.ai_mafija_backend.repository.VoteRepository;
+import com.niko.ai_mafija_backend.repository.GameActionRepository;
 import lombok.RequiredArgsConstructor;
+import jakarta.transaction.Transactional;
 import org.springframework.stereotype.Service;
 import com.niko.ai_mafija_backend.dto.Response.ResolveVoteResponse;
 import com.niko.ai_mafija_backend.model.Lobby;
@@ -29,7 +36,12 @@ public class VoteService {
     private final VoteRepository voteRepository;
     private final LobbyRepository lobbyRepository;
     private final PlayerAuthService playerAuthService;
+    private final WebSocketService webSocketService;
+    private final GameActionRepository gameActionRepository;
+    private final ActionService actionService;
+    private final GameOutcomeService gameOutcomeService;
 
+    @Transactional
     public VoteResponse submitVote(VoteRequest request) {
 
         Player voter = playerAuthService.authenticate(
@@ -38,44 +50,48 @@ public class VoteService {
         );
 
         if (request.getTargetPlayerId() == null) {
-            throw new RuntimeException("Meta glasa je obavezna.");
+            throw new BadRequestException("Meta glasa je obavezna.");
         }
 
         Player target = playerRepository.findById(request.getTargetPlayerId())
-                .orElseThrow(() -> new RuntimeException("Igrač za kojeg se glasa ne postoji."));
+                .orElseThrow(() -> new ResourceNotFoundException("Igrač za kojeg se glasa ne postoji."));
 
         if (!voter.getLobby().getId().equals(target.getLobby().getId())) {
-            throw new RuntimeException("Igrač i meta nisu u istom lobbyju.");
+            throw new ForbiddenException("Igrač i meta nisu u istom lobbyju.");
         }
 
         if (!voter.getIsAlive()) {
-            throw new RuntimeException("Mrtav igrač ne može glasati.");
+            throw new ForbiddenException("Mrtav igrač ne može glasati.");
         }
 
         if (!target.getIsAlive()) {
-            throw new RuntimeException("Ne možeš glasati za mrtvog igrača.");
+            throw new ConflictException("Ne možeš glasati za mrtvog igrača.");
         }
 
         GameState gameState = gameStateRepository.findByLobby(voter.getLobby())
-                .orElseThrow(() -> new RuntimeException("Game state ne postoji."));
+                .orElseThrow(() -> new ConflictException("Game state ne postoji."));
 
         if (gameState.getPhase().equals("FINISHED")) {
-            throw new RuntimeException("Igra je završena.");
+            throw new ConflictException("Igra je završena.");
         }
 
         if (!gameState.getPhase().equals("DAY") && !gameState.getPhase().equals("TIE_BREAK")) {
-            throw new RuntimeException("Glasanje je moguće samo tijekom DAY ili TIE_BREAK faze.");
+            throw new ConflictException("Glasanje je moguće samo tijekom DAY ili TIE_BREAK faze.");
+        }
+
+        if (isSilencedDuringCurrentVoting(voter, gameState)) {
+            throw new ForbiddenException("Utišani igrač ne može glasati u ovoj rundi.");
         }
 
         if (gameState.getPhase().equals("TIE_BREAK")) {
             List<Long> tiedPlayerIds = parseTiedPlayerIds(gameState.getTieBreakPlayerIds());
 
             if (tiedPlayerIds.contains(voter.getId())) {
-                throw new RuntimeException("Izjednačeni igrači ne glasaju u tie-breaku.");
+                throw new ForbiddenException("Izjednačeni igrači ne glasaju u tie-breaku.");
             }
 
             if (!tiedPlayerIds.contains(target.getId())) {
-                throw new RuntimeException("U tie-break glasanju možeš glasati samo za izjednačene igrače.");
+                throw new ForbiddenException("U tie-break glasanju možeš glasati samo za izjednačene igrače.");
             }
         }
 
@@ -87,7 +103,7 @@ public class VoteService {
         );
 
         if (alreadyVoted) {
-            throw new RuntimeException("Već si glasao u ovoj rundi.");
+            throw new ConflictException("Već si glasao u ovoj rundi.");
         }
 
         Vote vote = Vote.builder()
@@ -100,6 +116,7 @@ public class VoteService {
                 .build();
 
         Vote savedVote = voteRepository.save(vote);
+        webSocketService.publishGameStateChangedAfterCommit(voter.getLobby().getCode());
 
         if (haveAllRequiredPlayersVoted(voter.getLobby(), gameState)) {
             ResolveVoteResponse resolveResult = resolveVote(voter.getLobby().getCode());
@@ -124,16 +141,22 @@ public class VoteService {
         );
     }
 
+    @Transactional
     public ResolveVoteResponse resolveVote(String lobbyCode) {
 
         Lobby lobby = lobbyRepository.findByCode(lobbyCode)
-                .orElseThrow(() -> new RuntimeException("Lobby ne postoji."));
+                .orElseThrow(() -> new ResourceNotFoundException("Lobby ne postoji."));
 
         GameState gameState = gameStateRepository.findByLobby(lobby)
-                .orElseThrow(() -> new RuntimeException("Game state ne postoji."));
+                .orElseThrow(() -> new ConflictException("Game state ne postoji."));
 
         if (!gameState.getPhase().equals("DAY") && !gameState.getPhase().equals("TIE_BREAK")) {
-            throw new RuntimeException("Glasanje se može obraditi samo tijekom DAY ili TIE_BREAK faze.");
+            throw new ConflictException("Glasanje se može obraditi samo tijekom DAY ili TIE_BREAK faze.");
+        }
+
+        if (gameState.getPhase().equals("TIE_BREAK")
+                && getEligibleVoters(lobby, gameState).isEmpty()) {
+            return advanceToNextNightWithoutElimination(lobby, gameState, parseTiedPlayerIds(gameState.getTieBreakPlayerIds()));
         }
 
         List<Vote> votes = voteRepository.findByLobbyAndRoundNumberAndPhase(
@@ -143,7 +166,7 @@ public class VoteService {
         );
 
         if (votes.isEmpty()) {
-            throw new RuntimeException("Nema glasova za obradu.");
+            throw new ConflictException("Nema glasova za obradu.");
         }
 
         Map<Player, Long> voteCounts = votes.stream()
@@ -173,6 +196,11 @@ public class VoteService {
                 gameState.setTieBreakPlayerIds(convertTiedPlayerIdsToString(tiedPlayerIds));
                 gameState.setUpdateAt(OffsetDateTime.now());
                 gameStateRepository.save(gameState);
+                webSocketService.publishGameStateChangedAfterCommit(lobby.getCode());
+
+                if (getEligibleVoters(lobby, gameState).isEmpty()) {
+                    return advanceToNextNightWithoutElimination(lobby, gameState, tiedPlayerIds);
+                }
 
                 return new ResolveVoteResponse(
                         "TIE",
@@ -183,20 +211,7 @@ public class VoteService {
                 );
             }
 
-            gameState.setPhase("NIGHT");
-            gameState.setCurrentTurnRole("MAFIA");
-            gameState.setRoundNumber(gameState.getRoundNumber() + 1);
-            gameState.setTieBreakPlayerIds(null);
-            gameState.setUpdateAt(OffsetDateTime.now());
-            gameStateRepository.save(gameState);
-
-            return new ResolveVoteResponse(
-                    "NO_ELIMINATION",
-                    "Opet je izjednačeno. Nitko ne ispada.",
-                    gameState.getRoundNumber() - 1,
-                    null,
-                    tiedPlayerIds
-            );
+            return advanceToNextNightWithoutElimination(lobby, gameState, tiedPlayerIds);
         }
 
         Player eliminatedPlayer = topPlayers.get(0);
@@ -204,11 +219,9 @@ public class VoteService {
         playerRepository.save(eliminatedPlayer);
         gameState.setTieBreakPlayerIds(null);
 
-        String winner = checkWinCondition(lobby);
+        String winner = gameOutcomeService.finishGameIfWinnerExists(lobby, gameState);
 
         if (winner != null) {
-            finishGame(lobby, gameState);
-
             return new ResolveVoteResponse(
                     winner,
                     "Igra je završena.",
@@ -223,6 +236,8 @@ public class VoteService {
         gameState.setRoundNumber(gameState.getRoundNumber() + 1);
         gameState.setUpdateAt(OffsetDateTime.now());
         gameStateRepository.save(gameState);
+        actionService.initializeNightTurn(lobby, gameState);
+        webSocketService.publishGameStateChangedAfterCommit(lobby.getCode());
 
         return new ResolveVoteResponse(
                 "ELIMINATED",
@@ -233,38 +248,12 @@ public class VoteService {
         );
     }
 
-    private String checkWinCondition(Lobby lobby) {
-        List<Player> alivePlayers = playerRepository.findByLobbyAndIsAliveTrue(lobby);
-
-        long mafiaCount = alivePlayers.stream()
-                .filter(player ->
-                        player.getRole().getName().equalsIgnoreCase("MAFIA") ||
-                                player.getRole().getName().equalsIgnoreCase("DAMA")
-                )
-                .count();
-
-        long othersCount = alivePlayers.size() - mafiaCount;
-
-        if (mafiaCount == 0) {
-            return "CITIZENS_WIN";
-        }
-
-        if (mafiaCount >= othersCount) {
-            return "MAFIA_WIN";
-        }
-
-        return null;
-    }
-
-    private void finishGame(Lobby lobby, GameState gameState) {
-        lobby.setStatus("FINISHED");
-        lobby.setEndedAt(OffsetDateTime.now());
-
-        gameState.setPhase("FINISHED");
-        gameState.setUpdateAt(OffsetDateTime.now());
-
-        lobbyRepository.save(lobby);
-        gameStateRepository.save(gameState);
+    @Transactional
+    public ResolveVoteResponse resolveVoteAsHost(String lobbyCode, HostActionRequest request) {
+        Lobby lobby = lobbyRepository.findByCode(lobbyCode)
+                .orElseThrow(() -> new ResourceNotFoundException("Lobby ne postoji."));
+        playerAuthService.authenticateHostForLobby(request.playerId(), request.playerToken(), lobby);
+        return resolveVote(lobbyCode);
     }
 
     private String convertTiedPlayerIdsToString(List<Long> tiedPlayerIds) {
@@ -285,23 +274,9 @@ public class VoteService {
     }
 
     private boolean haveAllRequiredPlayersVoted(Lobby lobby, GameState gameState) {
-
-        List<Player> alivePlayers = playerRepository.findByLobbyAndIsAliveTrue(lobby);
-
-        List<Long> requiredVoterIds;
-
-        if (gameState.getPhase().equals("TIE_BREAK")) {
-            List<Long> tiedPlayerIds = parseTiedPlayerIds(gameState.getTieBreakPlayerIds());
-
-            requiredVoterIds = alivePlayers.stream()
-                    .map(Player::getId)
-                    .filter(playerId -> !tiedPlayerIds.contains(playerId))
-                    .toList();
-        } else {
-            requiredVoterIds = alivePlayers.stream()
-                    .map(Player::getId)
-                    .toList();
-        }
+        List<Long> requiredVoterIds = getEligibleVoters(lobby, gameState).stream()
+                .map(Player::getId)
+                .toList();
 
         List<Vote> votes = voteRepository.findByLobbyAndRoundNumberAndPhase(
                 lobby,
@@ -315,5 +290,44 @@ public class VoteService {
                 .toList();
 
         return votedPlayerIds.containsAll(requiredVoterIds);
+    }
+
+    private ResolveVoteResponse advanceToNextNightWithoutElimination(
+            Lobby lobby,
+            GameState gameState,
+            List<Long> tiedPlayerIds) {
+        Integer resolvedRound = gameState.getRoundNumber();
+        gameState.setPhase("NIGHT");
+        gameState.setCurrentTurnRole("MAFIA");
+        gameState.setRoundNumber(resolvedRound + 1);
+        gameState.setTieBreakPlayerIds(null);
+        gameState.setUpdateAt(OffsetDateTime.now());
+        gameStateRepository.save(gameState);
+        actionService.initializeNightTurn(lobby, gameState);
+        webSocketService.publishGameStateChangedAfterCommit(lobby.getCode());
+
+        return new ResolveVoteResponse(
+                "NO_ELIMINATION",
+                "Izjednačenje nije razriješeno. Nitko ne ispada.",
+                resolvedRound,
+                null,
+                tiedPlayerIds
+        );
+    }
+
+    private List<Player> getEligibleVoters(Lobby lobby, GameState gameState) {
+        List<Long> tiedPlayerIds = parseTiedPlayerIds(gameState.getTieBreakPlayerIds());
+        return playerRepository.findByLobbyAndIsAliveTrue(lobby).stream()
+                .filter(player -> !isSilencedDuringCurrentVoting(player, gameState))
+                .filter(player -> !"TIE_BREAK".equals(gameState.getPhase()) || !tiedPlayerIds.contains(player.getId()))
+                .toList();
+    }
+
+    private boolean isSilencedDuringCurrentVoting(Player player, GameState gameState) {
+        return gameActionRepository.findByLobbyAndPhaseAndRoundNumber(
+                        player.getLobby(), "NIGHT", gameState.getRoundNumber())
+                .stream()
+                .anyMatch(action -> "SILENCE".equals(action.getActionType())
+                        && action.getTargetPlayer().getId().equals(player.getId()));
     }
 }

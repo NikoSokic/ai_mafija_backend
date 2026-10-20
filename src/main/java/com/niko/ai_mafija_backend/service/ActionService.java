@@ -1,8 +1,13 @@
 package com.niko.ai_mafija_backend.service;
 
 import com.niko.ai_mafija_backend.dto.Requests.ActionRequest;
+import com.niko.ai_mafija_backend.dto.Requests.HostActionRequest;
 import com.niko.ai_mafija_backend.dto.Response.ActionResponse;
 import com.niko.ai_mafija_backend.dto.Response.ResolveNightResponse;
+import com.niko.ai_mafija_backend.exception.BadRequestException;
+import com.niko.ai_mafija_backend.exception.ConflictException;
+import com.niko.ai_mafija_backend.exception.ForbiddenException;
+import com.niko.ai_mafija_backend.exception.ResourceNotFoundException;
 import com.niko.ai_mafija_backend.model.GameAction;
 import com.niko.ai_mafija_backend.model.GameState;
 import com.niko.ai_mafija_backend.model.Player;
@@ -11,6 +16,7 @@ import com.niko.ai_mafija_backend.repository.GameStateRepository;
 import com.niko.ai_mafija_backend.repository.LobbyRepository;
 import com.niko.ai_mafija_backend.repository.PlayerRepository;
 import lombok.RequiredArgsConstructor;
+import jakarta.transaction.Transactional;
 import org.springframework.stereotype.Service;
 import com.niko.ai_mafija_backend.model.Lobby;
 
@@ -20,6 +26,7 @@ import java.util.Map;
 import java.util.stream.Collectors;
 import java.util.List;
 import java.time.OffsetDateTime;
+import java.util.Comparator;
 
 @Service
 @RequiredArgsConstructor
@@ -30,7 +37,10 @@ public class ActionService {
     private final GameStateRepository gameStateRepository;
     private final GameActionRepository gameActionRepository;
     private final PlayerAuthService playerAuthService;
+    private final WebSocketService webSocketService;
+    private final GameOutcomeService gameOutcomeService;
 
+    @Transactional
     public ActionResponse submitAction(ActionRequest request) {
 
         Player player = playerAuthService.authenticate(
@@ -39,53 +49,53 @@ public class ActionService {
         );
 
         if (request.getTargetPlayerId() == null) {
-            throw new RuntimeException("Meta je obavezna za akciju.");
+            throw new BadRequestException("Meta je obavezna za akciju.");
         }
 
         Player targetPlayer = playerRepository.findById(request.getTargetPlayerId())
-                .orElseThrow(() -> new RuntimeException("Meta ne postoji."));
+                .orElseThrow(() -> new ResourceNotFoundException("Meta ne postoji."));
 
         Player secondTargetPlayer = null;
 
         if (request.getSecondTargetPlayerId() != null) {
             secondTargetPlayer = playerRepository.findById(request.getSecondTargetPlayerId())
-                    .orElseThrow(() -> new RuntimeException("Druga meta ne postoji."));
+                    .orElseThrow(() -> new ResourceNotFoundException("Druga meta ne postoji."));
         }
 
         if (!player.getLobby().getId().equals(targetPlayer.getLobby().getId())) {
-            throw new RuntimeException("Igrač i meta nisu u istom lobbyju.");
+            throw new ForbiddenException("Igrač i meta nisu u istom lobbyju.");
         }
 
         if (secondTargetPlayer != null &&
                 !player.getLobby().getId().equals(secondTargetPlayer.getLobby().getId())) {
-            throw new RuntimeException("Druga meta nije u istom lobbyju.");
+            throw new ForbiddenException("Druga meta nije u istom lobbyju.");
         }
 
         if (!player.getIsAlive()) {
-            throw new RuntimeException("Mrtav igrač ne može izvršiti akciju.");
+            throw new ForbiddenException("Mrtav igrač ne može izvršiti akciju.");
         }
 
         if (secondTargetPlayer != null && !secondTargetPlayer.getIsAlive()) {
-            throw new RuntimeException("Ne možeš ciljati mrtvog igrača kao drugu metu.");
+            throw new ConflictException("Ne možeš ciljati mrtvog igrača kao drugu metu.");
         }
 
         if (!targetPlayer.getIsAlive()) {
-            throw new RuntimeException("Ne možeš ciljati mrtvog igrača.");
+            throw new ConflictException("Ne možeš ciljati mrtvog igrača.");
         }
 
         GameState gameState = gameStateRepository.findByLobby(player.getLobby())
-                .orElseThrow(() -> new RuntimeException("Game state ne postoji."));
+                .orElseThrow(() -> new ConflictException("Game state ne postoji."));
 
         if (gameState.getPhase().equals("FINISHED")) {
-            throw new RuntimeException("Igra je završena.");
+            throw new ConflictException("Igra je završena.");
         }
 
         if (!gameState.getPhase().equals("NIGHT")) {
-            throw new RuntimeException("Akcije se mogu slati samo tijekom noći.");
+            throw new ConflictException("Akcije se mogu slati samo tijekom noći.");
         }
 
         if (!isPlayersRoleCurrentTurn(player, gameState)) {
-            throw new RuntimeException("Nije red na tvoju ulogu.");
+            throw new ForbiddenException("Nije red na tvoju ulogu.");
         }
 
         validateRoleAction(player, request.getActionType());
@@ -105,7 +115,7 @@ public class ActionService {
         );
 
         if (actionAlreadyExists) {
-            throw new RuntimeException("Već si odigrao potez u ovoj fazi.");
+            throw new ConflictException("Već si odigrao potez u ovoj fazi.");
         }
 
         GameAction action = GameAction.builder()
@@ -136,6 +146,7 @@ public class ActionService {
                 player.getLobby(),
                 gameState
         );
+        webSocketService.publishGameStateChangedAfterCommit(player.getLobby().getCode());
 
         return new ActionResponse(
                 savedAction.getId(),
@@ -155,7 +166,7 @@ public class ActionService {
     private void validateRoleAction(Player player, String actionType) {
 
         if (player.getRole() == null) {
-            throw new RuntimeException("Igrač nema dodijeljenu ulogu.");
+            throw new ConflictException("Igrač nema dodijeljenu ulogu.");
         }
 
         String roleName = player.getRole().getName();
@@ -163,19 +174,19 @@ public class ActionService {
         switch (roleName) {
             case "Mafia" -> {
                 if (!actionType.equals("KILL")) {
-                    throw new RuntimeException("Mafia može koristiti samo KILL akciju.");
+                    throw new ForbiddenException("Mafia može koristiti samo KILL akciju.");
                 }
             }
 
             case "Doktor" -> {
                 if (!actionType.equals("SAVE")) {
-                    throw new RuntimeException("Doktor može koristiti samo SAVE akciju.");
+                    throw new ForbiddenException("Doktor može koristiti samo SAVE akciju.");
                 }
             }
 
             case "Policajac" -> {
                 if (!actionType.equals("INVESTIGATE")) {
-                    throw new RuntimeException("Policajac može koristiti samo INVESTIGATE akciju.");
+                    throw new ForbiddenException("Policajac može koristiti samo INVESTIGATE akciju.");
                 }
             }
 
@@ -186,7 +197,7 @@ public class ActionService {
                 if (aliveMafiaExists) {
 
                         if (!actionType.equals("SILENCE")) {
-                        throw new RuntimeException(
+                        throw new ForbiddenException(
                                 "Dama može koristiti samo SILENCE dok je Mafia živa."
                         );
                     }
@@ -194,7 +205,7 @@ public class ActionService {
                 } else {
 
                     if (!actionType.equals("KILL")) {
-                        throw new RuntimeException(
+                        throw new ForbiddenException(
                                 "Dama preuzima KILL kada nema žive Mafije."
                         );
                     }
@@ -202,33 +213,34 @@ public class ActionService {
             }
 
             case "Građanin" -> {
-                throw new RuntimeException("Građanin nema noćnu akciju.");
+                throw new ForbiddenException("Građanin nema noćnu akciju.");
             }
 
             case "Novinar" -> {
                 if (!actionType.equals("COMPARE")) {
-                    throw new RuntimeException("Novinar može koristiti samo COMPARE akciju.");
+                    throw new ForbiddenException("Novinar može koristiti samo COMPARE akciju.");
                 }
             }
 
-            default -> throw new RuntimeException("Nepoznata uloga: " + roleName);
+            default -> throw new ForbiddenException("Nepoznata uloga: " + roleName);
         }
     }
 
+    @Transactional
     public ResolveNightResponse resolveNight(String lobbyCode) {
 
         Lobby lobby = lobbyRepository.findByCode(lobbyCode)
-                .orElseThrow(() -> new RuntimeException("Lobby ne postoji."));
+                .orElseThrow(() -> new ResourceNotFoundException("Lobby ne postoji."));
 
         GameState gameState = gameStateRepository.findByLobby(lobby)
-                .orElseThrow(() -> new RuntimeException("Game state ne postoji."));
+                .orElseThrow(() -> new ConflictException("Game state ne postoji."));
 
         if (gameState.getPhase().equals("FINISHED")) {
-            throw new RuntimeException("Igra je završena.");
+            throw new ConflictException("Igra je završena.");
         }
 
         if (!gameState.getPhase().equals("NIGHT")) {
-            throw new RuntimeException("Noć se može obraditi samo dok je faza NIGHT.");
+            throw new ConflictException("Noć se može obraditi samo dok je faza NIGHT.");
         }
 
         List<GameAction> actions = gameActionRepository.findByLobbyAndPhaseAndRoundNumber(
@@ -239,7 +251,7 @@ public class ActionService {
 
         GameAction killAction = actions.stream()
                 .filter(action -> action.getActionType().equals("KILL"))
-                .findFirst()
+                .min(Comparator.comparing(GameAction::getId))
                 .orElse(null);
 
         List<GameAction> saveActions = actions.stream()
@@ -267,7 +279,7 @@ public class ActionService {
 
         for (Long overdosePlayerId : overdosePlayerIds) {
             Player overdosePlayer = playerRepository.findById(overdosePlayerId)
-                    .orElseThrow(() -> new RuntimeException("Igrač ne postoji."));
+                    .orElseThrow(() -> new ResourceNotFoundException("Igrač ne postoji."));
 
             if (overdosePlayer.getIsAlive()) {
                 overdosePlayer.setIsAlive(false);
@@ -299,11 +311,9 @@ public class ActionService {
 
 
 
-        String winner = checkWinCondition(lobby);
+        String winner = gameOutcomeService.finishGameIfWinnerExists(lobby, gameState);
 
         if (winner != null) {
-            finishGame(lobby, gameState);
-
             return new ResolveNightResponse(
                     winner,
                     gameState.getPhase(),
@@ -317,6 +327,7 @@ public class ActionService {
         gameState.setCurrentTurnRole(null);
         gameState.setUpdateAt(OffsetDateTime.now());
         gameStateRepository.save(gameState);
+        webSocketService.publishGameStateChangedAfterCommit(lobby.getCode());
 
         return new ResolveNightResponse(
                 "Noć je obrađena.",
@@ -327,38 +338,12 @@ public class ActionService {
         );
     }
 
-    private String checkWinCondition(Lobby lobby) {
-        List<Player> alivePlayers = playerRepository.findByLobbyAndIsAliveTrue(lobby);
-
-        long mafiaCount = alivePlayers.stream()
-                .filter(player ->
-                        player.getRole().getName().equalsIgnoreCase("Mafia") ||
-                                player.getRole().getName().equalsIgnoreCase("Dama")
-                )
-                .count();
-
-        long othersCount = alivePlayers.size() - mafiaCount;
-
-        if (mafiaCount == 0) {
-            return "CITIZENS_WIN";
-        }
-
-        if (mafiaCount >= othersCount) {
-            return "MAFIA_WIN";
-        }
-
-        return null;
-    }
-
-    private void finishGame(Lobby lobby, GameState gameState) {
-        lobby.setStatus("FINISHED");
-        lobby.setEndedAt(OffsetDateTime.now());
-
-        gameState.setPhase("FINISHED");
-        gameState.setUpdateAt(OffsetDateTime.now());
-
-        lobbyRepository.save(lobby);
-        gameStateRepository.save(gameState);
+    @Transactional
+    public ResolveNightResponse resolveNightAsHost(String lobbyCode, HostActionRequest request) {
+        Lobby lobby = lobbyRepository.findByCode(lobbyCode)
+                .orElseThrow(() -> new ResourceNotFoundException("Lobby ne postoji."));
+        playerAuthService.authenticateHostForLobby(request.playerId(), request.playerToken(), lobby);
+        return resolveNight(lobbyCode);
     }
 
     private boolean hasAliveMafia(Lobby lobby) {
@@ -407,7 +392,7 @@ public class ActionService {
         }
 
         if (currentTurnRole.equalsIgnoreCase("DAMA")) {
-            return playerRole.equalsIgnoreCase("Dama") && hasAliveMafia(player.getLobby());
+            return playerRole.equalsIgnoreCase("Dama");
         }
 
         return playerRole.equalsIgnoreCase(currentTurnRole);
@@ -433,6 +418,25 @@ public class ActionService {
         gameStateRepository.save(gameState);
 
         return null;
+    }
+
+    public void initializeNightTurn(Lobby lobby, GameState gameState) {
+        if (!"NIGHT".equals(gameState.getPhase())) {
+            return;
+        }
+
+        String firstRole = getFirstAvailableNightRole(lobby);
+        if (firstRole == null) {
+            gameState.setCurrentTurnRole(null);
+            gameState.setUpdateAt(OffsetDateTime.now());
+            gameStateRepository.save(gameState);
+            resolveNight(lobby.getCode());
+            return;
+        }
+
+        gameState.setCurrentTurnRole(firstRole);
+        gameState.setUpdateAt(OffsetDateTime.now());
+        gameStateRepository.save(gameState);
     }
 
     private boolean haveAllPlayersFromCurrentTurnRoleActed(Lobby lobby, GameState gameState) {
@@ -471,7 +475,7 @@ public class ActionService {
         }
 
         if (currentTurnRole.equalsIgnoreCase("DAMA")) {
-            return roleName.equalsIgnoreCase("Dama") && hasAliveMafia(player.getLobby());
+            return roleName.equalsIgnoreCase("Dama");
         }
 
         return roleName.equalsIgnoreCase(currentTurnRole);
@@ -490,8 +494,7 @@ public class ActionService {
         String roleName = player.getRole().getName();
 
         if (turnRole.equals("MAFIA")) {
-            return roleName.equalsIgnoreCase("Mafia")
-                    || roleName.equalsIgnoreCase("Dama");
+            return roleName.equalsIgnoreCase("Mafia");
         }
 
         return roleName.equalsIgnoreCase(turnRole);
@@ -517,6 +520,15 @@ public class ActionService {
             }
         }
 
+        return null;
+    }
+
+    private String getFirstAvailableNightRole(Lobby lobby) {
+        for (String role : List.of("MAFIA", "DAMA", "Doktor", "Policajac", "Novinar")) {
+            if (hasAlivePlayerForTurnRole(lobby, role)) {
+                return role;
+            }
+        }
         return null;
     }
 
@@ -546,7 +558,7 @@ public class ActionService {
                 );
 
         if (targetIsMafiaKillTarget) {
-            throw new RuntimeException("Dama ne može utišati igrača kojeg je Mafia odabrala za KILL.");
+            throw new ConflictException("Dama ne može utišati igrača kojeg je Mafia odabrala za KILL.");
         }
     }
 
@@ -556,11 +568,11 @@ public class ActionService {
         }
 
         if (secondTargetPlayer == null) {
-            throw new RuntimeException("Novinar mora odabrati dva igrača.");
+            throw new BadRequestException("Novinar mora odabrati dva igrača.");
         }
 
         if (targetPlayer.getId().equals(secondTargetPlayer.getId())) {
-            throw new RuntimeException("Novinar mora odabrati dva različita igrača.");
+            throw new BadRequestException("Novinar mora odabrati dva različita igrača.");
         }
     }
 

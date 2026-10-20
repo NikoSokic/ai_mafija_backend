@@ -11,14 +11,16 @@ import java.util.List;
 @Setter
 public class CreateLobbyRequest {
 
+    @NotBlank(message = "Nickname hosta je obavezan.")
+    @Size(max = 30, message = "Nickname hosta može imati najviše 30 znakova.")
     private String hostNickname;
 
-    @NotNull
-    @Min(4)
-    @Max(20)
+    @NotNull(message = "Maksimalan broj igrača je obavezan.")
+    @Min(value = 4, message = "Lobby mora imati najmanje 4 igrača.")
+    @Max(value = 20, message = "Lobby može imati najviše 20 igrača.")
     private Integer maxPlayers;
 
-    @NotEmpty
+    @NotEmpty(message = "Potrebno je odabrati barem jednu ulogu.")
     @Valid
     private List<LobbyRoleRequest> roles;
 }

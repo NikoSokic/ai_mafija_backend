@@ -1,9 +1,11 @@
 package com.niko.ai_mafija_backend.controller;
 
 import com.niko.ai_mafija_backend.dto.Requests.ActionRequest;
+import com.niko.ai_mafija_backend.dto.Requests.HostActionRequest;
 import com.niko.ai_mafija_backend.dto.Response.ActionResponse;
 import com.niko.ai_mafija_backend.dto.Response.ResolveNightResponse;
 import com.niko.ai_mafija_backend.service.ActionService;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -22,10 +24,11 @@ public class ActionController {
 
     @PostMapping("/resolve-night/{lobbyCode}")
     public ResponseEntity<ResolveNightResponse> resolveNight(
-            @PathVariable String lobbyCode) {
+            @PathVariable String lobbyCode,
+            @Valid @RequestBody HostActionRequest request) {
 
         return ResponseEntity.ok(
-                actionService.resolveNight(lobbyCode)
+                actionService.resolveNightAsHost(lobbyCode, request)
         );
     }
 }
