@@ -21,12 +21,10 @@ import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
-import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.Collectors;
 
 import static com.niko.ai_mafija_backend.service.GameRules.*;
@@ -35,8 +33,9 @@ import static com.niko.ai_mafija_backend.service.GameRules.*;
  * Noć: uvodna pauza, potezi uloga redom (MAFIA → DAMA → Doktor → Policajac → Novinar),
  * svaki s rokom, i obrada noći na kraju.
  *
- * Potez uloge čiji su igrači mrtvi se "glumi" (čeka nasumičnih 8–15 s), da nitko ne zna da je
- * uloga mrtva. Mafijaši smiju mijenjati metu dok se svi ne slože; ako istekne rok, vrijedi većina.
+ * Svaki potez traje isto (TURN_NARRATION + NIGHT_TURN) i ne završava ranije kad svi odigraju;
+ * potez mrtve uloge se "glumi" jednako dugo, da nitko ne zna da je uloga mrtva.
+ * Mafijaši smiju mijenjati metu do isteka roka; tada vrijedi većina.
  */
 @Service
 @RequiredArgsConstructor
@@ -102,7 +101,7 @@ public class ActionService {
             validateTarget(player, secondTarget, actionType, allowedTargets, gameState);
         }
 
-        // Mafijaši smiju promijeniti metu dok se ne slože; ostale uloge igraju jednom
+        // Mafijaši smiju promijeniti metu do isteka poteza; ostale uloge igraju jednom
         GameAction action = gameActionRepository
                 .findFirstByPlayerAndPhaseAndRoundNumber(player, NIGHT, gameState.getRoundNumber())
                 .orElse(null);
@@ -126,7 +125,8 @@ public class ActionService {
         String investigationResult = INVESTIGATE.equals(actionType) ? getInvestigationResult(target) : null;
         String journalistResult = COMPARE.equals(actionType) ? getJournalistResult(target, secondTarget) : null;
 
-        ResolveNightResponse resolveResult = finishTurnIfComplete(lobby, gameState);
+        // potez traje do isteka roka i kad su svi odigrali, pa se noć ovdje nikad ne obrađuje
+        ResolveNightResponse resolveResult = null;
         webSocketService.publishGameStateChangedAfterCommit(lobby.getCode());
 
         return new ActionResponse(
@@ -180,40 +180,6 @@ public class ActionService {
         advanceTurn(lobby, gameState);
     }
 
-    /** Kad su svi igrači poteza odigrali (mafija se i složila oko mete), odmah ide sljedeći potez. */
-    public ResolveNightResponse finishTurnIfComplete(Lobby lobby, GameState gameState) {
-        if (!NIGHT.equals(gameState.getPhase()) || gameState.getCurrentTurnRole() == null) {
-            return null;
-        }
-        if (!isTurnComplete(lobby, gameState)) {
-            return null;
-        }
-        return advanceTurn(lobby, gameState);
-    }
-
-    private boolean isTurnComplete(Lobby lobby, GameState gameState) {
-        String turn = gameState.getCurrentTurnRole();
-        List<Player> actors = rules.turnActors(lobby, turn);
-        if (actors.isEmpty()) {
-            // glumljeni potez čeka svoj rok
-            return false;
-        }
-
-        Map<Long, GameAction> actionsByPlayer = rules.nightActions(lobby, gameState.getRoundNumber()).stream()
-                .collect(Collectors.toMap(action -> action.getPlayer().getId(), action -> action, (a, b) -> a));
-        if (!actors.stream().allMatch(actor -> actionsByPlayer.containsKey(actor.getId()))) {
-            return false;
-        }
-        if (!TURN_MAFIA.equals(turn)) {
-            return true;
-        }
-        long distinctTargets = actors.stream()
-                .map(actor -> actionsByPlayer.get(actor.getId()).getTargetPlayer().getId())
-                .distinct()
-                .count();
-        return distinctTargets == 1;
-    }
-
     /** Sljedeći potez noći, ili obrada noći kad potezi ponestanu */
     private ResolveNightResponse advanceTurn(Lobby lobby, GameState gameState) {
         String nextTurn = nextTurn(lobby, gameState.getCurrentTurnRole());
@@ -222,9 +188,8 @@ public class ActionService {
         }
 
         OffsetDateTime now = OffsetDateTime.now();
-        boolean fake = rules.turnActors(lobby, nextTurn).isEmpty();
         gameState.setCurrentTurnRole(nextTurn);
-        gameState.setPhaseEndsAt(now.plus(fake ? fakeTurnDuration() : NIGHT_TURN));
+        gameState.setPhaseEndsAt(now.plus(TURN_NARRATION).plus(NIGHT_TURN));
         gameState.setUpdateAt(now);
         gameStateRepository.save(gameState);
         webSocketService.publishGameStateChangedAfterCommit(lobby.getCode());
@@ -240,10 +205,6 @@ public class ActionService {
             }
         }
         return null;
-    }
-
-    private Duration fakeTurnDuration() {
-        return Duration.ofSeconds(ThreadLocalRandom.current().nextInt(FAKE_TURN_MIN_SECONDS, FAKE_TURN_MAX_SECONDS + 1));
     }
 
     /**

@@ -44,7 +44,6 @@ public class PlayerService {
     private final WebSocketService webSocketService;
     private final GameStateService gameStateService;
     private final GameOutcomeService gameOutcomeService;
-    private final ActionService actionService;
     private final VoteService voteService;
 
     @Transactional
@@ -220,10 +219,8 @@ public class PlayerService {
         if (gameOutcomeService.finishGameIfWinnerExists(lobby, gameState) != null) {
             return;
         }
-        // ne čekaj više igrača koji je otišao
-        if (NIGHT.equals(gameState.getPhase())) {
-            actionService.finishTurnIfComplete(lobby, gameState);
-        } else if (isVotingPhase(gameState.getPhase())) {
+        // ne čekaj više igrača koji je otišao (noćni potez ionako traje do svog roka)
+        if (isVotingPhase(gameState.getPhase())) {
             voteService.resolveIfAllVoted(lobby, gameState);
         }
         webSocketService.publishGameStateChangedAfterCommit(lobby.getCode());
