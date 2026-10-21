@@ -40,4 +40,11 @@ public class Player {
     @Column(name = "player_token", unique = true)
     private String playerToken;
 
+    /** Kako je igrač ispao: NIGHT, VOTE ili LEFT (GameRules.ELIMINATED_*); null dok je živ. */
+    @Column(name = "eliminated_how")
+    private String eliminatedHow;
+
+    @Column(name = "eliminated_round")
+    private Integer eliminatedRound;
+
 }

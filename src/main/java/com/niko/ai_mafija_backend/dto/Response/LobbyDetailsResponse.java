@@ -20,4 +20,7 @@ public class LobbyDetailsResponse {
     private Integer roundNumber;
 
     private List<LobbyPlayerResponse> players;
+
+    /** Sastav uloga koji je domaćin odabrao */
+    private List<LobbyRoleResponse> roles;
 }

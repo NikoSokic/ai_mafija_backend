@@ -37,4 +37,12 @@ public class GameState {
 
     @Column(name = "tie_break_player_ids")
     private String tieBreakPlayerIds;
+
+    /** Kad istječe trenutna faza ili potez noći; null = nema roka. GameTimerService tada pomiče igru dalje. */
+    @Column(name = "phase_ends_at")
+    private OffsetDateTime phaseEndsAt;
+
+    /** Tko je stradao u zadnjoj noći (id-evi odvojeni zarezom), za jutarnji izvještaj. */
+    @Column(name = "night_killed_player_ids")
+    private String nightKilledPlayerIds;
 }

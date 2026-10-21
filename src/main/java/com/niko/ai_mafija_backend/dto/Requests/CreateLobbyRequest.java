@@ -12,7 +12,7 @@ import java.util.List;
 public class CreateLobbyRequest {
 
     @NotBlank(message = "Nickname hosta je obavezan.")
-    @Size(max = 30, message = "Nickname hosta može imati najviše 30 znakova.")
+    @Size(max = 16, message = "Nickname hosta može imati najviše 16 znakova.")
     private String hostNickname;
 
     @NotNull(message = "Maksimalan broj igrača je obavezan.")

@@ -16,11 +16,12 @@ public class LobbyRole {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @OneToOne
+    // soba ima više uloga, a ista uloga je u više soba
+    @ManyToOne
     @JoinColumn(name = "Lobby_id",nullable = false)
     private Lobby lobby;
 
-    @OneToOne
+    @ManyToOne
     @JoinColumn(name = "role_id",nullable = false)
     private Role role;
 

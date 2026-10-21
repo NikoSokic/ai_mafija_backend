@@ -6,28 +6,38 @@ import com.niko.ai_mafija_backend.dto.Response.ActionResponse;
 import com.niko.ai_mafija_backend.dto.Response.ResolveNightResponse;
 import com.niko.ai_mafija_backend.exception.BadRequestException;
 import com.niko.ai_mafija_backend.exception.ConflictException;
+import com.niko.ai_mafija_backend.exception.ErrorCode;
 import com.niko.ai_mafija_backend.exception.ForbiddenException;
 import com.niko.ai_mafija_backend.exception.ResourceNotFoundException;
 import com.niko.ai_mafija_backend.model.GameAction;
 import com.niko.ai_mafija_backend.model.GameState;
+import com.niko.ai_mafija_backend.model.Lobby;
 import com.niko.ai_mafija_backend.model.Player;
 import com.niko.ai_mafija_backend.repository.GameActionRepository;
 import com.niko.ai_mafija_backend.repository.GameStateRepository;
 import com.niko.ai_mafija_backend.repository.LobbyRepository;
 import com.niko.ai_mafija_backend.repository.PlayerRepository;
-import lombok.RequiredArgsConstructor;
 import jakarta.transaction.Transactional;
+import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
-import com.niko.ai_mafija_backend.model.Lobby;
 
-
-import java.util.ArrayList;
-import java.util.Map;
-import java.util.stream.Collectors;
-import java.util.List;
+import java.time.Duration;
 import java.time.OffsetDateTime;
-import java.util.Comparator;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.stream.Collectors;
 
+import static com.niko.ai_mafija_backend.service.GameRules.*;
+
+/**
+ * Noć: uvodna pauza, potezi uloga redom (MAFIA → DAMA → Doktor → Policajac → Novinar),
+ * svaki s rokom, i obrada noći na kraju.
+ *
+ * Potez uloge čiji su igrači mrtvi se "glumi" (čeka nasumičnih 8–15 s), da nitko ne zna da je
+ * uloga mrtva. Mafijaši smiju mijenjati metu dok se svi ne slože; ako istekne rok, vrijedi većina.
+ */
 @Service
 @RequiredArgsConstructor
 public class ActionService {
@@ -39,120 +49,91 @@ public class ActionService {
     private final PlayerAuthService playerAuthService;
     private final WebSocketService webSocketService;
     private final GameOutcomeService gameOutcomeService;
+    private final GameRulesService rules;
 
     @Transactional
     public ActionResponse submitAction(ActionRequest request) {
 
-        Player player = playerAuthService.authenticate(
-                request.getPlayerId(),
-                request.getPlayerToken()
-        );
-
         if (request.getTargetPlayerId() == null) {
-            throw new BadRequestException("Meta je obavezna za akciju.");
+            throw new BadRequestException(ErrorCode.INVALID_TARGET, "Meta je obavezna za akciju.");
+        }
+        if (request.getActionType() == null) {
+            throw new BadRequestException(ErrorCode.INVALID_ACTION, "Vrsta akcije je obavezna.");
         }
 
-        Player targetPlayer = playerRepository.findById(request.getTargetPlayerId())
-                .orElseThrow(() -> new ResourceNotFoundException("Meta ne postoji."));
+        Player player = playerAuthService.authenticate(request.getPlayerId(), request.getPlayerToken());
+        Lobby lobby = player.getLobby();
+        GameState gameState = lockGameState(lobby);
 
-        Player secondTargetPlayer = null;
-
-        if (request.getSecondTargetPlayerId() != null) {
-            secondTargetPlayer = playerRepository.findById(request.getSecondTargetPlayerId())
-                    .orElseThrow(() -> new ResourceNotFoundException("Druga meta ne postoji."));
+        if (FINISHED.equals(gameState.getPhase())) {
+            throw new ConflictException(ErrorCode.GAME_FINISHED, "Igra je završena.");
+        }
+        if (!NIGHT.equals(gameState.getPhase())) {
+            throw new ConflictException(ErrorCode.WRONG_PHASE, "Akcije se mogu slati samo tijekom noći.");
+        }
+        if (!isAlive(player)) {
+            throw new ForbiddenException(ErrorCode.DEAD_PLAYER, "Mrtav igrač ne može izvršiti akciju.");
+        }
+        if (!rules.canAct(player, gameState)) {
+            throw new ForbiddenException(ErrorCode.NOT_YOUR_TURN, "Nije red na tvoju ulogu.");
         }
 
-        if (!player.getLobby().getId().equals(targetPlayer.getLobby().getId())) {
-            throw new ForbiddenException("Igrač i meta nisu u istom lobbyju.");
+        String actionType = actionTypeForTurn(gameState.getCurrentTurnRole());
+        if (!actionType.equals(request.getActionType())) {
+            throw new ForbiddenException(ErrorCode.INVALID_ACTION,
+                    "U ovom potezu možeš koristiti samo akciju " + actionType + ".");
         }
 
-        if (secondTargetPlayer != null &&
-                !player.getLobby().getId().equals(secondTargetPlayer.getLobby().getId())) {
-            throw new ForbiddenException("Druga meta nije u istom lobbyju.");
+        Player target = findTarget(request.getTargetPlayerId(), lobby);
+        Player secondTarget = null;
+        if (COMPARE.equals(actionType)) {
+            if (request.getSecondTargetPlayerId() == null) {
+                throw new BadRequestException(ErrorCode.INVALID_TARGET, "Novinar mora odabrati dva igrača.");
+            }
+            if (request.getSecondTargetPlayerId().equals(request.getTargetPlayerId())) {
+                throw new BadRequestException(ErrorCode.INVALID_TARGET, "Novinar mora odabrati dva različita igrača.");
+            }
+            secondTarget = findTarget(request.getSecondTargetPlayerId(), lobby);
         }
 
-        if (!player.getIsAlive()) {
-            throw new ForbiddenException("Mrtav igrač ne može izvršiti akciju.");
+        List<Long> allowedTargets = rules.allowedTargets(player, gameState, actionType);
+        validateTarget(player, target, actionType, allowedTargets, gameState);
+        if (secondTarget != null) {
+            validateTarget(player, secondTarget, actionType, allowedTargets, gameState);
         }
 
-        if (secondTargetPlayer != null && !secondTargetPlayer.getIsAlive()) {
-            throw new ConflictException("Ne možeš ciljati mrtvog igrača kao drugu metu.");
+        // Mafijaši smiju promijeniti metu dok se ne slože; ostale uloge igraju jednom
+        GameAction action = gameActionRepository
+                .findFirstByPlayerAndPhaseAndRoundNumber(player, NIGHT, gameState.getRoundNumber())
+                .orElse(null);
+        if (action != null && !KILL.equals(actionType)) {
+            throw new ConflictException(ErrorCode.ALREADY_ACTED, "Već si odigrao potez u ovoj fazi.");
         }
-
-        if (!targetPlayer.getIsAlive()) {
-            throw new ConflictException("Ne možeš ciljati mrtvog igrača.");
+        if (action == null) {
+            action = GameAction.builder()
+                    .player(player)
+                    .lobby(lobby)
+                    .actionType(actionType)
+                    .phase(NIGHT)
+                    .roundNumber(gameState.getRoundNumber())
+                    .build();
         }
-
-        GameState gameState = gameStateRepository.findByLobby(player.getLobby())
-                .orElseThrow(() -> new ConflictException("Game state ne postoji."));
-
-        if (gameState.getPhase().equals("FINISHED")) {
-            throw new ConflictException("Igra je završena.");
-        }
-
-        if (!gameState.getPhase().equals("NIGHT")) {
-            throw new ConflictException("Akcije se mogu slati samo tijekom noći.");
-        }
-
-        if (!isPlayersRoleCurrentTurn(player, gameState)) {
-            throw new ForbiddenException("Nije red na tvoju ulogu.");
-        }
-
-        validateRoleAction(player, request.getActionType());
-
-        validateJournalistAction(
-                player,
-                targetPlayer,
-                secondTargetPlayer
-        );
-
-        validateDamaDoesNotSilenceMafiaTarget(player, targetPlayer, gameState);
-
-        boolean actionAlreadyExists = gameActionRepository.existsByPlayerAndPhaseAndRoundNumber(
-                player,
-                gameState.getPhase(),
-                gameState.getRoundNumber()
-        );
-
-        if (actionAlreadyExists) {
-            throw new ConflictException("Već si odigrao potez u ovoj fazi.");
-        }
-
-        GameAction action = GameAction.builder()
-                .player(player)
-                .targetPlayer(targetPlayer)
-                .secondTargetPlayer(secondTargetPlayer)
-                .lobby(player.getLobby())
-                .actionType(request.getActionType())
-                .phase(gameState.getPhase())
-                .roundNumber(gameState.getRoundNumber())
-                .createdAt(OffsetDateTime.now())
-                .build();
-
+        action.setTargetPlayer(target);
+        action.setSecondTargetPlayer(secondTarget);
+        action.setCreatedAt(OffsetDateTime.now());
         GameAction savedAction = gameActionRepository.save(action);
 
-        String investigationResult = null;
-        String journalistResult = null;
+        String investigationResult = INVESTIGATE.equals(actionType) ? getInvestigationResult(target) : null;
+        String journalistResult = COMPARE.equals(actionType) ? getJournalistResult(target, secondTarget) : null;
 
-        if (request.getActionType().equals("COMPARE")) {
-            journalistResult = getJournalistResult(targetPlayer, secondTargetPlayer);
-        }
-
-        if (request.getActionType().equals("INVESTIGATE")) {
-            investigationResult = getInvestigationResult(targetPlayer);
-        }
-
-        ResolveNightResponse resolveResult = advanceNightTurnIfCurrentRoleFinished(
-                player.getLobby(),
-                gameState
-        );
-        webSocketService.publishGameStateChangedAfterCommit(player.getLobby().getCode());
+        ResolveNightResponse resolveResult = finishTurnIfComplete(lobby, gameState);
+        webSocketService.publishGameStateChangedAfterCommit(lobby.getCode());
 
         return new ActionResponse(
                 savedAction.getId(),
                 savedAction.getActionType(),
-                savedAction.getPlayer().getId(),
-                savedAction.getTargetPlayer().getId(),
+                player.getId(),
+                target.getId(),
                 resolveResult == null
                         ? "Akcija je spremljena."
                         : "Akcija je spremljena. Noć je automatski obrađena.",
@@ -163,438 +144,225 @@ public class ActionService {
         );
     }
 
-    private void validateRoleAction(Player player, String actionType) {
+    /** Domaćin završava noć odmah; uloge koje još nisu odigrale gube potez. */
+    @Transactional
+    public ResolveNightResponse resolveNightAsHost(String lobbyCode, HostActionRequest request) {
+        Lobby lobby = lobbyRepository.findByCode(lobbyCode)
+                .orElseThrow(() -> new ResourceNotFoundException(ErrorCode.LOBBY_NOT_FOUND, "Lobby ne postoji."));
+        playerAuthService.authenticateHostForLobby(request.playerId(), request.playerToken(), lobby);
+        GameState gameState = lockGameState(lobby);
 
-        if (player.getRole() == null) {
-            throw new ConflictException("Igrač nema dodijeljenu ulogu.");
+        if (FINISHED.equals(gameState.getPhase())) {
+            throw new ConflictException(ErrorCode.GAME_FINISHED, "Igra je završena.");
         }
-
-        String roleName = player.getRole().getName();
-
-        switch (roleName) {
-            case "Mafia" -> {
-                if (!actionType.equals("KILL")) {
-                    throw new ForbiddenException("Mafia može koristiti samo KILL akciju.");
-                }
-            }
-
-            case "Doktor" -> {
-                if (!actionType.equals("SAVE")) {
-                    throw new ForbiddenException("Doktor može koristiti samo SAVE akciju.");
-                }
-            }
-
-            case "Policajac" -> {
-                if (!actionType.equals("INVESTIGATE")) {
-                    throw new ForbiddenException("Policajac može koristiti samo INVESTIGATE akciju.");
-                }
-            }
-
-            case "Dama" -> {
-
-                boolean aliveMafiaExists = hasAliveMafia(player.getLobby());
-
-                if (aliveMafiaExists) {
-
-                        if (!actionType.equals("SILENCE")) {
-                        throw new ForbiddenException(
-                                "Dama može koristiti samo SILENCE dok je Mafia živa."
-                        );
-                    }
-
-                } else {
-
-                    if (!actionType.equals("KILL")) {
-                        throw new ForbiddenException(
-                                "Dama preuzima KILL kada nema žive Mafije."
-                        );
-                    }
-                }
-            }
-
-            case "Građanin" -> {
-                throw new ForbiddenException("Građanin nema noćnu akciju.");
-            }
-
-            case "Novinar" -> {
-                if (!actionType.equals("COMPARE")) {
-                    throw new ForbiddenException("Novinar može koristiti samo COMPARE akciju.");
-                }
-            }
-
-            default -> throw new ForbiddenException("Nepoznata uloga: " + roleName);
+        if (!NIGHT.equals(gameState.getPhase())) {
+            throw new ConflictException(ErrorCode.WRONG_PHASE, "Noć se može obraditi samo dok je faza NIGHT.");
         }
+        return resolveNight(lobby, gameState);
     }
 
-    @Transactional
-    public ResolveNightResponse resolveNight(String lobbyCode) {
+    /** Početak noći: uvodna pauza (na prvoj noći igrači gledaju svoju ulogu), pa prvi potez. */
+    public void startNight(Lobby lobby, GameState gameState, int roundNumber) {
+        OffsetDateTime now = OffsetDateTime.now();
+        gameState.setPhase(NIGHT);
+        gameState.setRoundNumber(roundNumber);
+        gameState.setCurrentTurnRole(null);
+        gameState.setTieBreakPlayerIds(null);
+        gameState.setNightKilledPlayerIds(null);
+        gameState.setPhaseEndsAt(now.plus(roundNumber == 1 ? FIRST_NIGHT_INTRO : NIGHT_INTRO));
+        gameState.setUpdateAt(now);
+        gameStateRepository.save(gameState);
+        webSocketService.publishGameStateChangedAfterCommit(lobby.getCode());
+    }
 
-        Lobby lobby = lobbyRepository.findByCode(lobbyCode)
-                .orElseThrow(() -> new ResourceNotFoundException("Lobby ne postoji."));
+    /** Istekao je uvod ili rok poteza: tko nije odigrao, gubi potez. */
+    public void handleNightTimeout(Lobby lobby, GameState gameState) {
+        advanceTurn(lobby, gameState);
+    }
 
-        GameState gameState = gameStateRepository.findByLobby(lobby)
-                .orElseThrow(() -> new ConflictException("Game state ne postoji."));
+    /** Kad su svi igrači poteza odigrali (mafija se i složila oko mete), odmah ide sljedeći potez. */
+    public ResolveNightResponse finishTurnIfComplete(Lobby lobby, GameState gameState) {
+        if (!NIGHT.equals(gameState.getPhase()) || gameState.getCurrentTurnRole() == null) {
+            return null;
+        }
+        if (!isTurnComplete(lobby, gameState)) {
+            return null;
+        }
+        return advanceTurn(lobby, gameState);
+    }
 
-        if (gameState.getPhase().equals("FINISHED")) {
-            throw new ConflictException("Igra je završena.");
+    private boolean isTurnComplete(Lobby lobby, GameState gameState) {
+        String turn = gameState.getCurrentTurnRole();
+        List<Player> actors = rules.turnActors(lobby, turn);
+        if (actors.isEmpty()) {
+            // glumljeni potez čeka svoj rok
+            return false;
         }
 
-        if (!gameState.getPhase().equals("NIGHT")) {
-            throw new ConflictException("Noć se može obraditi samo dok je faza NIGHT.");
+        Map<Long, GameAction> actionsByPlayer = rules.nightActions(lobby, gameState.getRoundNumber()).stream()
+                .collect(Collectors.toMap(action -> action.getPlayer().getId(), action -> action, (a, b) -> a));
+        if (!actors.stream().allMatch(actor -> actionsByPlayer.containsKey(actor.getId()))) {
+            return false;
+        }
+        if (!TURN_MAFIA.equals(turn)) {
+            return true;
+        }
+        long distinctTargets = actors.stream()
+                .map(actor -> actionsByPlayer.get(actor.getId()).getTargetPlayer().getId())
+                .distinct()
+                .count();
+        return distinctTargets == 1;
+    }
+
+    /** Sljedeći potez noći, ili obrada noći kad potezi ponestanu */
+    private ResolveNightResponse advanceTurn(Lobby lobby, GameState gameState) {
+        String nextTurn = nextTurn(lobby, gameState.getCurrentTurnRole());
+        if (nextTurn == null) {
+            return resolveNight(lobby, gameState);
         }
 
-        List<GameAction> actions = gameActionRepository.findByLobbyAndPhaseAndRoundNumber(
-                lobby,
-                "NIGHT",
-                gameState.getRoundNumber()
-        );
+        OffsetDateTime now = OffsetDateTime.now();
+        boolean fake = rules.turnActors(lobby, nextTurn).isEmpty();
+        gameState.setCurrentTurnRole(nextTurn);
+        gameState.setPhaseEndsAt(now.plus(fake ? fakeTurnDuration() : NIGHT_TURN));
+        gameState.setUpdateAt(now);
+        gameStateRepository.save(gameState);
+        webSocketService.publishGameStateChangedAfterCommit(lobby.getCode());
+        return null;
+    }
 
-        GameAction killAction = actions.stream()
-                .filter(action -> action.getActionType().equals("KILL"))
-                .min(Comparator.comparing(GameAction::getId))
-                .orElse(null);
+    private String nextTurn(Lobby lobby, String currentTurn) {
+        int start = currentTurn == null ? 0 : NIGHT_ORDER.indexOf(currentTurn) + 1;
+        for (int i = start; i < NIGHT_ORDER.size(); i++) {
+            String turn = NIGHT_ORDER.get(i);
+            if (rules.turnExistsInGame(lobby, turn)) {
+                return turn;
+            }
+        }
+        return null;
+    }
 
-        List<GameAction> saveActions = actions.stream()
-                .filter(action -> action.getActionType().equals("SAVE"))
-                .toList();
+    private Duration fakeTurnDuration() {
+        return Duration.ofSeconds(ThreadLocalRandom.current().nextInt(FAKE_TURN_MIN_SECONDS, FAKE_TURN_MAX_SECONDS + 1));
+    }
 
-        List<Long> silencedPlayerIds = actions.stream()
-                .filter(action -> action.getActionType().equals("SILENCE"))
-                .map(action -> action.getTargetPlayer().getId())
-                .toList();
+    /**
+     * Obrada noći: meta mafije (većina) umire, osim ako ju je zaštitio točno jedan Doktor.
+     * Dva Doktora na istom igraču = predoziranje (umire). Zatim pobjednik ili dan (rasprava).
+     */
+    public ResolveNightResponse resolveNight(Lobby lobby, GameState gameState) {
+        Integer roundNumber = gameState.getRoundNumber();
+        List<GameAction> actions = rules.nightActions(lobby, roundNumber);
+        Long mafiaTargetId = rules.mafiaKillTarget(lobby, roundNumber);
 
-        List<Long> killedPlayerIds = new ArrayList<>();
-
-        Map<Long, Long> saveCountsByPlayerId = saveActions.stream()
-                .collect(Collectors.groupingBy(
-                        saveAction -> saveAction.getTargetPlayer().getId(),
-                        Collectors.counting()
-                ));
-
-        List<Long> overdosePlayerIds = saveCountsByPlayerId.entrySet()
-                .stream()
+        Map<Long, Long> saveCounts = actions.stream()
+                .filter(action -> SAVE.equals(action.getActionType()))
+                .collect(Collectors.groupingBy(action -> action.getTargetPlayer().getId(), Collectors.counting()));
+        List<Long> overdoseIds = saveCounts.entrySet().stream()
                 .filter(entry -> entry.getValue() >= 2)
                 .map(Map.Entry::getKey)
                 .toList();
 
-        for (Long overdosePlayerId : overdosePlayerIds) {
-            Player overdosePlayer = playerRepository.findById(overdosePlayerId)
-                    .orElseThrow(() -> new ResourceNotFoundException("Igrač ne postoji."));
-
-            if (overdosePlayer.getIsAlive()) {
-                overdosePlayer.setIsAlive(false);
-                playerRepository.save(overdosePlayer);
-                killedPlayerIds.add(overdosePlayer.getId());
-            }
+        List<Long> killedIds = new ArrayList<>();
+        for (Long overdoseId : overdoseIds) {
+            killIfAlive(overdoseId, roundNumber, killedIds);
+        }
+        if (mafiaTargetId != null && saveCounts.getOrDefault(mafiaTargetId, 0L) != 1) {
+            killIfAlive(mafiaTargetId, roundNumber, killedIds);
         }
 
-        if (killAction != null) {
-
-            Player mafiaTarget = killAction.getTargetPlayer();
-
-            long saveCountForMafiaTarget = saveCountsByPlayerId.getOrDefault(
-                    mafiaTarget.getId(),
-                    0L
-            );
-
-            boolean wasSavedByExactlyOneDoctor = saveCountForMafiaTarget == 1;
-            boolean diedFromOverdose = overdosePlayerIds.contains(mafiaTarget.getId());
-
-            if (!wasSavedByExactlyOneDoctor || diedFromOverdose) {
-                if (mafiaTarget.getIsAlive()) {
-                    mafiaTarget.setIsAlive(false);
-                    playerRepository.save(mafiaTarget);
-                    killedPlayerIds.add(mafiaTarget.getId());
-                }
-            }
-        }
-
-
-
-        String winner = gameOutcomeService.finishGameIfWinnerExists(lobby, gameState);
-
-        if (winner != null) {
-            return new ResolveNightResponse(
-                    winner,
-                    gameState.getPhase(),
-                    gameState.getRoundNumber(),
-                    killedPlayerIds,
-                    silencedPlayerIds
-            );
-        }
-
-        gameState.setPhase("DAY");
-        gameState.setCurrentTurnRole(null);
-        gameState.setUpdateAt(OffsetDateTime.now());
-        gameStateRepository.save(gameState);
-        webSocketService.publishGameStateChangedAfterCommit(lobby.getCode());
-
-        return new ResolveNightResponse(
-                "Noć je obrađena.",
-                gameState.getPhase(),
-                gameState.getRoundNumber(),
-                killedPlayerIds,
-                silencedPlayerIds
-        );
-    }
-
-    @Transactional
-    public ResolveNightResponse resolveNightAsHost(String lobbyCode, HostActionRequest request) {
-        Lobby lobby = lobbyRepository.findByCode(lobbyCode)
-                .orElseThrow(() -> new ResourceNotFoundException("Lobby ne postoji."));
-        playerAuthService.authenticateHostForLobby(request.playerId(), request.playerToken(), lobby);
-        return resolveNight(lobbyCode);
-    }
-
-    private boolean hasAliveMafia(Lobby lobby) {
-
-        return playerRepository.findByLobbyAndIsAliveTrue(lobby)
-                .stream()
-                .anyMatch(player ->
-                        player.getRole().getName().equalsIgnoreCase("Mafia")
-                );
-    }
-
-    private String getInvestigationResult(Player targetPlayer) {
-
-        String roleName = targetPlayer.getRole().getName();
-
-        if (roleName.equalsIgnoreCase("Mafia")) {
-            return "MAFIA";
-        }
-
-        if (roleName.equalsIgnoreCase("Dama")) {
-
-            boolean aliveMafiaExists = hasAliveMafia(targetPlayer.getLobby());
-
-            if (!aliveMafiaExists) {
-                return "MAFIA";
-            }
-
-            return "NOT_MAFIA";
-        }
-
-        return "NOT_MAFIA";
-    }
-
-    private boolean isPlayersRoleCurrentTurn(Player player, GameState gameState) {
-
-        String currentTurnRole = gameState.getCurrentTurnRole();
-
-        if (currentTurnRole == null) {
-            return false;
-        }
-
-        String playerRole = player.getRole().getName();
-
-        if (currentTurnRole.equalsIgnoreCase("MAFIA")) {
-            return playerRole.equalsIgnoreCase("Mafia");
-        }
-
-        if (currentTurnRole.equalsIgnoreCase("DAMA")) {
-            return playerRole.equalsIgnoreCase("Dama");
-        }
-
-        return playerRole.equalsIgnoreCase(currentTurnRole);
-    }
-
-    private ResolveNightResponse advanceNightTurnIfCurrentRoleFinished(Lobby lobby, GameState gameState) {
-        if (!haveAllPlayersFromCurrentTurnRoleActed(lobby, gameState)) {
-            return null;
-        }
-
-        String nextRole = getNextAvailableNightRole(lobby, gameState.getCurrentTurnRole());
-
-        if (nextRole == null) {
-            gameState.setCurrentTurnRole(null);
-            gameState.setUpdateAt(OffsetDateTime.now());
-            gameStateRepository.save(gameState);
-
-            return resolveNight(lobby.getCode());
-        }
-
-        gameState.setCurrentTurnRole(nextRole);
-        gameState.setUpdateAt(OffsetDateTime.now());
-        gameStateRepository.save(gameState);
-
-        return null;
-    }
-
-    public void initializeNightTurn(Lobby lobby, GameState gameState) {
-        if (!"NIGHT".equals(gameState.getPhase())) {
-            return;
-        }
-
-        String firstRole = getFirstAvailableNightRole(lobby);
-        if (firstRole == null) {
-            gameState.setCurrentTurnRole(null);
-            gameState.setUpdateAt(OffsetDateTime.now());
-            gameStateRepository.save(gameState);
-            resolveNight(lobby.getCode());
-            return;
-        }
-
-        gameState.setCurrentTurnRole(firstRole);
-        gameState.setUpdateAt(OffsetDateTime.now());
-        gameStateRepository.save(gameState);
-    }
-
-    private boolean haveAllPlayersFromCurrentTurnRoleActed(Lobby lobby, GameState gameState) {
-        List<Player> alivePlayers = playerRepository.findByLobbyAndIsAliveTrue(lobby);
-
-        List<Long> requiredPlayerIds = alivePlayers.stream()
-                .filter(player -> player.getRole() != null)
-                .filter(player -> isRolePartOfCurrentTurn(player, gameState.getCurrentTurnRole()))
-                .map(Player::getId)
-                .toList();
-
-        List<GameAction> actions = gameActionRepository.findByLobbyAndPhaseAndRoundNumber(
-                lobby,
-                gameState.getPhase(),
-                gameState.getRoundNumber()
-        );
-
-        List<Long> actedPlayerIds = actions.stream()
-                .map(action -> action.getPlayer().getId())
+        List<Long> silencedIds = actions.stream()
+                .filter(action -> SILENCE.equals(action.getActionType()))
+                .map(action -> action.getTargetPlayer().getId())
+                .filter(id -> !killedIds.contains(id))
                 .distinct()
                 .toList();
 
-        return actedPlayerIds.containsAll(requiredPlayerIds);
-    }
+        gameState.setNightKilledPlayerIds(GameRulesService.joinIds(killedIds));
+        gameState.setCurrentTurnRole(null);
+        gameState.setPhaseEndsAt(null);
 
-    private boolean isRolePartOfCurrentTurn(Player player, String currentTurnRole) {
-
-        if (currentTurnRole == null) {
-            return false;
-        }
-
-        String roleName = player.getRole().getName();
-
-        if (currentTurnRole.equalsIgnoreCase("MAFIA")) {
-            return roleName.equalsIgnoreCase("Mafia");
-        }
-
-        if (currentTurnRole.equalsIgnoreCase("DAMA")) {
-            return roleName.equalsIgnoreCase("Dama");
-        }
-
-        return roleName.equalsIgnoreCase(currentTurnRole);
-    }
-
-    private boolean hasAlivePlayerForTurnRole(Lobby lobby, String turnRole) {
-
-        List<Player> alivePlayers = playerRepository.findByLobbyAndIsAliveTrue(lobby);
-
-        return alivePlayers.stream()
-                .anyMatch(player -> isRolePartOfTurnRole(player, turnRole));
-    }
-
-    private boolean isRolePartOfTurnRole(Player player, String turnRole) {
-
-        String roleName = player.getRole().getName();
-
-        if (turnRole.equals("MAFIA")) {
-            return roleName.equalsIgnoreCase("Mafia");
-        }
-
-        return roleName.equalsIgnoreCase(turnRole);
-    }
-
-    private String getNextAvailableNightRole(Lobby lobby, String currentTurnRole)   {
-
-        List<String> nightOrder = List.of(
-                "MAFIA",
-                "DAMA",
-                "Doktor",
-                "Policajac",
-                "Novinar"
+        String winner = gameOutcomeService.determineWinner(lobby);
+        ResolveNightResponse response = new ResolveNightResponse(
+                winner != null ? winner : "Noć je obrađena.",
+                winner != null ? FINISHED : DAY,
+                roundNumber,
+                killedIds,
+                silencedIds
         );
+        webSocketService.publishLobbyEventAfterCommit(lobby.getCode(), "NIGHT_RESOLVED", "Noć je obrađena.", response);
 
-        int currentIndex = nightOrder.indexOf(currentTurnRole);
-
-        for (int i = currentIndex + 1; i < nightOrder.size(); i++) {
-            String nextRole = nightOrder.get(i);
-
-            if (hasAlivePlayerForTurnRole(lobby, nextRole)) {
-                return nextRole;
-            }
+        if (winner != null) {
+            gameOutcomeService.finishGameIfWinnerExists(lobby, gameState);
+            return response;
         }
 
-        return null;
+        OffsetDateTime now = OffsetDateTime.now();
+        gameState.setPhase(DAY);
+        gameState.setPhaseEndsAt(now.plus(DISCUSSION));
+        gameState.setUpdateAt(now);
+        gameStateRepository.save(gameState);
+        webSocketService.publishGameStateChangedAfterCommit(lobby.getCode());
+        return response;
     }
 
-    private String getFirstAvailableNightRole(Lobby lobby) {
-        for (String role : List.of("MAFIA", "DAMA", "Doktor", "Policajac", "Novinar")) {
-            if (hasAlivePlayerForTurnRole(lobby, role)) {
-                return role;
-            }
+    private void killIfAlive(Long playerId, Integer roundNumber, List<Long> killedIds) {
+        Player player = playerRepository.findById(playerId)
+                .orElseThrow(() -> new ResourceNotFoundException(ErrorCode.PLAYER_NOT_FOUND, "Igrač ne postoji."));
+        if (isAlive(player)) {
+            gameOutcomeService.eliminate(player, ELIMINATED_NIGHT, roundNumber);
+            killedIds.add(playerId);
         }
-        return null;
     }
 
-    private void validateDamaDoesNotSilenceMafiaTarget(Player player, Player targetPlayer, GameState gameState) {
-        if (!player.getRole().getName().equalsIgnoreCase("Dama")) {
+    private GameState lockGameState(Lobby lobby) {
+        return gameStateRepository.findByLobbyForUpdate(lobby)
+                .orElseThrow(() -> new ConflictException(ErrorCode.GAME_NOT_STARTED, "Game state ne postoji."));
+    }
+
+    private Player findTarget(Long targetId, Lobby lobby) {
+        Player target = playerRepository.findById(targetId)
+                .orElseThrow(() -> new ResourceNotFoundException(ErrorCode.PLAYER_NOT_FOUND, "Meta ne postoji."));
+        if (!target.getLobby().getId().equals(lobby.getId())) {
+            throw new ForbiddenException(ErrorCode.NOT_IN_LOBBY, "Igrač i meta nisu u istom lobbyju.");
+        }
+        return target;
+    }
+
+    private void validateTarget(Player actor, Player target, String actionType, List<Long> allowedTargets,
+                                GameState gameState) {
+        if (!isAlive(target)) {
+            throw new ConflictException(ErrorCode.INVALID_TARGET, "Ne možeš ciljati mrtvog igrača.");
+        }
+        if (allowedTargets.contains(target.getId())) {
             return;
         }
-
-        if (!gameState.getCurrentTurnRole().equals("DAMA")) {
-            return;
+        String message;
+        if (target.getId().equals(actor.getId())) {
+            message = "Ne možeš odabrati sebe.";
+        } else if (KILL.equals(actionType) && isMafiaTeam(target)) {
+            message = "Ne možeš ciljati člana svog tima.";
+        } else if (SILENCE.equals(actionType)
+                && target.getId().equals(rules.mafiaKillTarget(actor.getLobby(), gameState.getRoundNumber()))) {
+            message = "Dama ne može utišati igrača kojeg je Mafia odabrala za KILL.";
+        } else {
+            message = "Taj igrač nije dopuštena meta.";
         }
-
-        if (!hasAliveMafia(player.getLobby())) {
-            return;
-        }
-
-        List<GameAction> actions = gameActionRepository.findByLobbyAndPhaseAndRoundNumber(
-                player.getLobby(),
-                gameState.getPhase(),
-                gameState.getRoundNumber()
-        );
-
-        boolean targetIsMafiaKillTarget = actions.stream()
-                .anyMatch(action ->
-                        action.getActionType().equals("KILL")
-                                && action.getTargetPlayer().getId().equals(targetPlayer.getId())
-                );
-
-        if (targetIsMafiaKillTarget) {
-            throw new ConflictException("Dama ne može utišati igrača kojeg je Mafia odabrala za KILL.");
-        }
+        throw new ConflictException(ErrorCode.INVALID_TARGET, message);
     }
 
-    private void validateJournalistAction(Player player, Player targetPlayer, Player secondTargetPlayer) {
-        if (!player.getRole().getName().equalsIgnoreCase("Novinar")) {
-            return;
+    /** Dama izgleda nevino dok je Mafija živa */
+    private String getInvestigationResult(Player target) {
+        if (hasRole(target, MAFIA)) {
+            return "MAFIA";
         }
-
-        if (secondTargetPlayer == null) {
-            throw new BadRequestException("Novinar mora odabrati dva igrača.");
+        if (hasRole(target, DAMA)) {
+            return rules.hasAliveMafia(target.getLobby()) ? "NOT_MAFIA" : "MAFIA";
         }
-
-        if (targetPlayer.getId().equals(secondTargetPlayer.getId())) {
-            throw new BadRequestException("Novinar mora odabrati dva različita igrača.");
-        }
+        return "NOT_MAFIA";
     }
 
-    private String getJournalistResult(Player firstPlayer, Player secondPlayer) {
-
-        boolean firstMafiaTeam = isMafiaTeam(firstPlayer);
-        boolean secondMafiaTeam = isMafiaTeam(secondPlayer);
-
-        if (firstMafiaTeam == secondMafiaTeam) {
-            return "ISTI_TIM";
-        }
-
-        return "RAZLICIT_TIM";
+    private String getJournalistResult(Player first, Player second) {
+        return isMafiaTeam(first) == isMafiaTeam(second) ? "ISTI_TIM" : "RAZLICIT_TIM";
     }
-
-    private boolean isMafiaTeam(Player player) {
-
-        String roleName = player.getRole().getName();
-
-        return roleName.equalsIgnoreCase("Mafia")
-                || roleName.equalsIgnoreCase("Dama");
-    }
-
-
 }

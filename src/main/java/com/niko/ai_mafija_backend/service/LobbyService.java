@@ -6,8 +6,10 @@ import com.niko.ai_mafija_backend.dto.Requests.HostActionRequest;
 import com.niko.ai_mafija_backend.dto.Response.CreateLobbyResponse;
 import com.niko.ai_mafija_backend.dto.Response.LobbyDetailsResponse;
 import com.niko.ai_mafija_backend.dto.Response.LobbyPlayerResponse;
+import com.niko.ai_mafija_backend.dto.Response.LobbyRoleResponse;
 import com.niko.ai_mafija_backend.exception.BadRequestException;
 import com.niko.ai_mafija_backend.exception.ConflictException;
+import com.niko.ai_mafija_backend.exception.ErrorCode;
 import com.niko.ai_mafija_backend.exception.ResourceNotFoundException;
 import com.niko.ai_mafija_backend.model.Lobby;
 import com.niko.ai_mafija_backend.model.LobbyRole;
@@ -57,12 +59,12 @@ public class LobbyService {
                 .sum();
 
         if (totalRoles != request.getMaxPlayers()) {
-            throw new BadRequestException("Broj uloga mora biti jednak broju igrača.");
+            throw new BadRequestException(ErrorCode.INVALID_ROLE_CONFIG, "Broj uloga mora biti jednak broju igrača.");
         }
 
         Lobby lobby = Lobby.builder()
                 .code(generateUniqueLobbyCode())
-                .status("WAITING")
+                .status(GameRules.LOBBY_WAITING)
                 .maxPlayers(request.getMaxPlayers())
                 .createdAt(OffsetDateTime.now())
                 .build();
@@ -70,7 +72,7 @@ public class LobbyService {
         Lobby savedLobby = lobbyRepository.save(lobby);
 
         Player hostPlayer = Player.builder()
-                .nickname(request.getHostNickname())
+                .nickname(request.getHostNickname().trim())
                 .lobby(savedLobby)
                 .isHost(true)
                 .isAlive(true)
@@ -86,7 +88,7 @@ public class LobbyService {
         for (LobbyRoleRequest roleRequest : request.getRoles()) {
 
             Role role = roleRepository.findById(roleRequest.getRoleId())
-                    .orElseThrow(() -> new ResourceNotFoundException("Uloga ne postoji."));
+                    .orElseThrow(() -> new ResourceNotFoundException(ErrorCode.ROLE_NOT_FOUND, "Uloga ne postoji."));
 
             LobbyRole lobbyRole = LobbyRole.builder()
                     .lobby(savedLobby)
@@ -113,11 +115,11 @@ public class LobbyService {
 
         for (LobbyRoleRequest roleRequest : request.getRoles()) {
             if (!roleIds.add(roleRequest.getRoleId())) {
-                throw new BadRequestException("Ista uloga ne može biti navedena više puta.");
+                throw new BadRequestException(ErrorCode.INVALID_ROLE_CONFIG, "Ista uloga ne može biti navedena više puta.");
             }
 
             if (!roleRepository.existsById(roleRequest.getRoleId())) {
-                throw new ResourceNotFoundException("Uloga ne postoji.");
+                throw new ResourceNotFoundException(ErrorCode.ROLE_NOT_FOUND, "Uloga ne postoji.");
             }
         }
     }
@@ -149,17 +151,18 @@ public class LobbyService {
     public void startLobby(String code, HostActionRequest request) {
 
         Lobby lobby = lobbyRepository.findByCode(code)
-                .orElseThrow(() -> new ResourceNotFoundException("Lobby ne postoji."));
+                .orElseThrow(() -> new ResourceNotFoundException(ErrorCode.LOBBY_NOT_FOUND, "Lobby ne postoji."));
         playerAuthService.authenticateHostForLobby(request.playerId(), request.playerToken(), lobby);
 
-        if (!lobby.getStatus().equals("WAITING")) {
-            throw new ConflictException("Igra je već započela ili lobby nije u WAITING stanju.");
+        if (!lobby.getStatus().equals(GameRules.LOBBY_WAITING)) {
+            throw new ConflictException(ErrorCode.GAME_ALREADY_STARTED,
+                    "Igra je već započela ili lobby nije u WAITING stanju.");
         }
 
         List<Player> players = playerRepository.findByLobby(lobby);
 
         if (players.size() != lobby.getMaxPlayers()) {
-            throw new ConflictException("Lobby nije pun.");
+            throw new ConflictException(ErrorCode.LOBBY_NOT_FULL, "Lobby nije pun.");
         }
 
         List<LobbyRole> lobbyRoles = lobbyRoleRepository.findByLobby(lobby);
@@ -174,7 +177,7 @@ public class LobbyService {
         }
 
         if (rolesToAssign.size() != players.size()) {
-            throw new ConflictException("Broj uloga ne odgovara broju igrača.");
+            throw new ConflictException(ErrorCode.INVALID_ROLE_CONFIG, "Broj uloga ne odgovara broju igrača.");
         }
 
         Collections.shuffle(players);
@@ -186,7 +189,7 @@ public class LobbyService {
             playerRepository.save(player);
         }
 
-        lobby.setStatus("IN_PROGRESS");
+        lobby.setStatus(GameRules.LOBBY_IN_PROGRESS);
         lobby.setStartedAt(OffsetDateTime.now());
 
         lobbyRepository.save(lobby);
@@ -200,14 +203,8 @@ public class LobbyService {
 
         GameState gameState = new GameState();
         gameState.setLobby(lobby);
-        gameState.setPhase("NIGHT");
-        gameState.setRoundNumber(1);
-        gameState.setUpdateAt(OffsetDateTime.now());
-        gameState.setCurrentTurnRole("MAFIA");
-
-        gameStateRepository.save(gameState);
-        actionService.initializeNightTurn(lobby, gameState);
-        webSocketService.publishGameStateChangedAfterCommit(lobby.getCode());
+        // prva noć počinje uvodnom pauzom dok igrači gledaju svoje uloge
+        actionService.startNight(lobby, gameState, 1);
     }
 
     private void validateStartedLobbyRoleConfiguration(List<LobbyRole> lobbyRoles) {
@@ -218,11 +215,11 @@ public class LobbyService {
                     || lobbyRole.getRole().getId() == null
                     || lobbyRole.getRoleCount() == null
                     || lobbyRole.getRoleCount() <= 0) {
-                throw new ConflictException("Konfiguracija uloga lobija nije valjana.");
+                throw new ConflictException(ErrorCode.INVALID_ROLE_CONFIG, "Konfiguracija uloga lobija nije valjana.");
             }
 
             if (!roleIds.add(lobbyRole.getRole().getId())) {
-                throw new ConflictException("Konfiguracija uloga sadrži duplikat uloge.");
+                throw new ConflictException(ErrorCode.INVALID_ROLE_CONFIG, "Konfiguracija uloga sadrži duplikat uloge.");
             }
         }
     }
@@ -230,19 +227,23 @@ public class LobbyService {
     public LobbyDetailsResponse getLobbyDetails(String code) {
 
         Lobby lobby = lobbyRepository.findByCode(code)
-                .orElseThrow(() -> new ResourceNotFoundException("Lobby ne postoji."));
+                .orElseThrow(() -> new ResourceNotFoundException(ErrorCode.LOBBY_NOT_FOUND, "Lobby ne postoji."));
 
         GameState gameState = gameStateRepository.findByLobby(lobby)
                 .orElse(null);
 
-        List<Player> players = playerRepository.findByLobby(lobby);
+        boolean finished = GameRules.LOBBY_FINISHED.equals(lobby.getStatus());
+        List<LobbyPlayerResponse> playerResponses = playerRepository.findByLobby(lobby).stream()
+                .sorted(Comparator.comparing(Player::getId))
+                .map(player -> LobbyPlayerResponse.from(player, finished))
+                .toList();
 
-        List<LobbyPlayerResponse> playerResponses = players.stream()
-                .map(player -> new LobbyPlayerResponse(
-                        player.getId(),
-                        player.getNickname(),
-                        player.getIsAlive()
-                ))
+        List<LobbyRoleResponse> roles = lobbyRoleRepository.findByLobby(lobby).stream()
+                .sorted(Comparator.comparing(lobbyRole -> lobbyRole.getRole().getId()))
+                .map(lobbyRole -> new LobbyRoleResponse(
+                        lobbyRole.getRole().getId(),
+                        lobbyRole.getRole().getName(),
+                        lobbyRole.getRoleCount()))
                 .toList();
 
         return new LobbyDetailsResponse(
@@ -252,7 +253,8 @@ public class LobbyService {
                 lobby.getMaxPlayers(),
                 gameState != null ? gameState.getPhase() : null,
                 gameState != null ? gameState.getRoundNumber() : null,
-                playerResponses
+                playerResponses,
+                roles
         );
     }
 }

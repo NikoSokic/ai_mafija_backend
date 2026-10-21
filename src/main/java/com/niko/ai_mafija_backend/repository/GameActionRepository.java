@@ -6,6 +6,7 @@ import com.niko.ai_mafija_backend.model.Player;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 import java.util.List;
+import java.util.Optional;
 
 public interface GameActionRepository extends JpaRepository<GameAction, Long> {
 
@@ -14,6 +15,13 @@ public interface GameActionRepository extends JpaRepository<GameAction, Long> {
             String phase,
             Integer roundNumber
     );
+
+    Optional<GameAction> findFirstByPlayerAndPhaseAndRoundNumber(
+            Player player,
+            String phase,
+            Integer roundNumber
+    );
+
     List<GameAction> findByLobbyAndPhaseAndRoundNumber(
             Lobby lobby,
             String phase,
