@@ -47,4 +47,8 @@ public class Player {
     @Column(name = "eliminated_round")
     private Integer eliminatedRound;
 
+    /** Jedan emoji kao avatar (do 8 znakova jer složeni emoji ima više znakova); null = nije odabran */
+    @Column(name = "avatar_emoji", length = 8)
+    private String avatarEmoji;
+
 }

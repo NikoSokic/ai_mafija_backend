@@ -50,7 +50,7 @@ class LobbyRulesTests extends GameTestSupport {
     }
 
     @Test
-    void leavingDuringGameEliminatesPlayerAndRevokesToken() {
+    void leavingDuringGameIsRejectedAndKeepsPlayerInGame() {
         Lobby lobby = lobby();
         host(lobby, "Mafia");
         player(lobby, "Mafia", true);
@@ -60,49 +60,12 @@ class LobbyRulesTests extends GameTestSupport {
         player(lobby, "Građanin", true);
         state(lobby, "DAY", 1);
 
-        playerService.leaveLobby(lobby.getCode(), leave(leaver));
+        assertCode(ErrorCode.GAME_IN_PROGRESS, () -> playerService.leaveLobby(lobby.getCode(), leave(leaver)));
 
-        Player left = reload(leaver);
-        assertFalse(left.getIsAlive());
-        assertEquals("LEFT", left.getEliminatedHow());
-        assertNull(left.getPlayerToken());
-        assertCode(ErrorCode.INVALID_TOKEN, () -> playerService.leaveLobby(lobby.getCode(), leave(leaver)));
-    }
-
-    @Test
-    void votingResolvesWhenTheLastMissingVoterLeaves() {
-        Lobby lobby = lobby();
-        Player mafia = host(lobby, "Mafia");
-        List<Player> c = List.of(player(lobby, "Građanin", true), player(lobby, "Građanin", true),
-                player(lobby, "Građanin", true), player(lobby, "Građanin", true));
-        state(lobby, "VOTING", 1);
-
-        vote(mafia, c.get(0));
-        vote(c.get(1), c.get(0));
-        vote(c.get(2), c.get(0));
-        vote(c.get(0), mafia);
-        // glasali su svi osim c3; kad on ode, više ga se ne čeka
-        playerService.leaveLobby(lobby.getCode(), leave(c.get(3)));
-
-        assertFalse(reload(c.get(0)).getIsAlive());
-        assertEquals("NIGHT", reload(lobby).getPhase());
-    }
-
-    @Test
-    void leavingCanEndTheGame() {
-        Lobby lobby = lobby();
-        Player mafia = host(lobby, "Mafia");
-        player(lobby, "Građanin", true);
-        player(lobby, "Građanin", true);
-        state(lobby, "DAY", 1);
-
-        playerService.leaveLobby(lobby.getCode(), leave(mafia));
-
-        assertEquals("FINISHED", reload(lobby).getPhase());
-        PublicGameStateResponse state = gameStateService.getPublicGameState(lobby.getCode());
-        assertEquals("CITIZENS_WIN", state.winner());
-        // kad igra završi, uloge su javne
-        assertTrue(state.players().stream().allMatch(player -> player.getRoleName() != null));
+        Player stillThere = reload(leaver);
+        assertTrue(stillThere.getIsAlive());
+        assertEquals(leaver.getPlayerToken(), stillThere.getPlayerToken());
+        assertNull(stillThere.getEliminatedHow());
     }
 
     @Test

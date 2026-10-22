@@ -6,6 +6,7 @@ import com.niko.ai_mafija_backend.dto.Requests.PlayerRoleRequest;
 import com.niko.ai_mafija_backend.dto.Requests.ReconnectRequest;
 import com.niko.ai_mafija_backend.dto.Response.JoinLobbyResponse;
 import com.niko.ai_mafija_backend.dto.Response.LobbyPlayerResponse;
+import com.niko.ai_mafija_backend.dto.Response.HostChangedResponse;
 import com.niko.ai_mafija_backend.dto.Response.PlayerLeftResponse;
 import com.niko.ai_mafija_backend.dto.Response.PlayerRoleResponse;
 import com.niko.ai_mafija_backend.dto.Response.ReconnectResponse;
@@ -43,8 +44,6 @@ public class PlayerService {
     private final GameStateRepository gameStateRepository;
     private final WebSocketService webSocketService;
     private final GameStateService gameStateService;
-    private final GameOutcomeService gameOutcomeService;
-    private final VoteService voteService;
 
     @Transactional
     public JoinLobbyResponse joinLobby(String code, JoinLobbyRequest request) {
@@ -69,6 +68,7 @@ public class PlayerService {
         Player player = Player.builder()
                 .lobby(lobby)
                 .nickname(nickname)
+                .avatarEmoji(LobbyService.cleanAvatar(request.getAvatarEmoji()))
                 .isHost(false)
                 .isAlive(true)
                 .joinedAt(OffsetDateTime.now())
@@ -177,7 +177,8 @@ public class PlayerService {
         if (LOBBY_WAITING.equals(lobby.getStatus())) {
             leaveWaitingLobby(lobby, player);
         } else if (LOBBY_IN_PROGRESS.equals(lobby.getStatus())) {
-            leaveRunningGame(lobby, player);
+            // tijekom igre se ne izlazi (ispadanje bi otkrilo ulogu i pomaknulo igru); klijent samo lokalno izlazi
+            throw new ConflictException(ErrorCode.GAME_IN_PROGRESS, "Igra je u tijeku, sobu nije moguće napustiti.");
         } else {
             Player newHost = handOverHostIfNeeded(lobby, player);
             player.setPlayerToken(null);
@@ -198,31 +199,6 @@ public class PlayerService {
         Player newHost = handOverHostIfNeeded(lobby, player);
         playerRepository.delete(player);
         publishPlayerLeft(lobby, player, newHost);
-        webSocketService.publishGameStateChangedAfterCommit(lobby.getCode());
-    }
-
-    private void leaveRunningGame(Lobby lobby, Player player) {
-        GameState gameState = gameStateRepository.findByLobbyForUpdate(lobby).orElse(null);
-
-        if (isAlive(player)) {
-            gameOutcomeService.eliminate(player, ELIMINATED_LEFT,
-                    gameState != null ? gameState.getRoundNumber() : null);
-        }
-        Player newHost = handOverHostIfNeeded(lobby, player);
-        player.setPlayerToken(null);
-        playerRepository.save(player);
-        publishPlayerLeft(lobby, player, newHost);
-
-        if (gameState == null) {
-            return;
-        }
-        if (gameOutcomeService.finishGameIfWinnerExists(lobby, gameState) != null) {
-            return;
-        }
-        // ne čekaj više igrača koji je otišao (noćni potez ionako traje do svog roka)
-        if (isVotingPhase(gameState.getPhase())) {
-            voteService.resolveIfAllVoted(lobby, gameState);
-        }
         webSocketService.publishGameStateChangedAfterCommit(lobby.getCode());
     }
 
@@ -265,6 +241,14 @@ public class PlayerService {
                 "Igrač je napustio sobu.",
                 new PlayerLeftResponse(player.getId(), player.getNickname(), newHost != null ? newHost.getId() : null)
         );
+        if (newHost != null) {
+            webSocketService.publishLobbyEventAfterCommit(
+                    lobby.getCode(),
+                    "HOST_CHANGED",
+                    "Domaćin je promijenjen.",
+                    new HostChangedResponse(newHost.getId())
+            );
+        }
     }
 
     private Lobby findLobby(String code) {

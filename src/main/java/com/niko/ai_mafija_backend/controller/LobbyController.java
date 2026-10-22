@@ -9,7 +9,13 @@ import com.niko.ai_mafija_backend.dto.Response.CreateLobbyResponse;
 import com.niko.ai_mafija_backend.dto.Response.JoinLobbyResponse;
 import com.niko.ai_mafija_backend.dto.Response.LobbyDetailsResponse;
 import com.niko.ai_mafija_backend.dto.Response.LobbyPlayerResponse;
+import com.niko.ai_mafija_backend.dto.Response.PublicLobbyResponse;
+import com.niko.ai_mafija_backend.exception.BadRequestException;
+import com.niko.ai_mafija_backend.exception.ErrorCode;
 import com.niko.ai_mafija_backend.service.LobbyService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -23,7 +29,7 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/lobbies")
 @RequiredArgsConstructor
-
+@Tag(name = "Sobe", description = "Stvaranje sobe, ulazak, izlazak, popis javnih soba i stanje igre")
 public class LobbyController {
 
     private final LobbyService lobbyService;
@@ -31,11 +37,31 @@ public class LobbyController {
     private final GameStateService gameStateService;
     private final VoteService voteService;
 
+    @Operation(summary = "Stvori sobu",
+            description = "Domaćin dobiva playerId i playerToken. Postavke mode (LIVE|ONLINE, zadano LIVE), "
+                    + "isPublic (zadano false), voiceEnabled (zadano true) i hostAvatarEmoji su neobavezne. "
+                    + "Greške: 400 VALIDATION_ERROR (npr. nadimak prazan ili duži od 16 znakova, nepoznat mode), "
+                    + "400 INVALID_ROLE_CONFIG, 404 ROLE_NOT_FOUND.")
     @PostMapping
     public ResponseEntity<CreateLobbyResponse> createLobby(@Valid @RequestBody CreateLobbyRequest request) {
         return ResponseEntity.ok(lobbyService.createLobby(request));
     }
 
+    @Operation(summary = "Popis javnih soba",
+            description = "Sobe sa statusom WAITING i isPublic=true, najnovije prve, najviše 20. "
+                    + "Privatne sobe se ne izlistavaju: public=false vraća 400 VALIDATION_ERROR.")
+    @GetMapping
+    public ResponseEntity<List<PublicLobbyResponse>> getPublicLobbies(
+            @Parameter(description = "Mora biti true") @RequestParam(name = "public", defaultValue = "true") boolean publicOnly) {
+        if (!publicOnly) {
+            throw new BadRequestException(ErrorCode.VALIDATION_ERROR, "Popis privatnih soba nije dostupan.");
+        }
+        return ResponseEntity.ok(lobbyService.getPublicLobbies());
+    }
+
+    @Operation(summary = "Uđi u sobu",
+            description = "Nadimak je jedinstven u sobi (bez obzira na velika/mala slova); avatarEmoji je neobavezan. "
+                    + "Greške: 400 VALIDATION_ERROR, 404 LOBBY_NOT_FOUND, 409 NICKNAME_TAKEN, LOBBY_FULL, GAME_ALREADY_STARTED.")
     @PostMapping("/{code}/join")
     public ResponseEntity<JoinLobbyResponse> joinLobby(
             @PathVariable String code,
@@ -75,6 +101,11 @@ public class LobbyController {
         return ResponseEntity.ok().build();
     }
 
+    @Operation(summary = "Napusti sobu",
+            description = "Samo dok soba čeka igrače (WAITING): igrač se briše, nadimak se oslobađa, događaj PLAYER_LEFT. "
+                    + "Ako izlazi domaćin, domaćin postaje igrač koji je najduže u sobi (događaj HOST_CHANGED {hostPlayerId}); "
+                    + "ako nema nikoga, soba se briše. Tijekom igre vraća 409 GAME_IN_PROGRESS. "
+                    + "Greške: 401 INVALID_TOKEN, 403 NOT_IN_LOBBY, 404 LOBBY_NOT_FOUND.")
     @PostMapping("/{code}/leave")
     public ResponseEntity<Void> leaveLobby(
             @PathVariable String code,
@@ -91,6 +122,9 @@ public class LobbyController {
         return ResponseEntity.ok(gameStateService.getGameState(code, playerId, playerToken));
     }
 
+    @Operation(summary = "Detalji sobe",
+            description = "Javni podaci: igrači (host, avatarEmoji), hostPlayerId, sastav uloga (roles), "
+                    + "postavke (mode, isPublic, voiceEnabled). Uloge igrača su tajne dok igra traje.")
     @GetMapping("/{code}")
     public ResponseEntity<LobbyDetailsResponse> getLobbyDetails(
             @PathVariable String code) {

@@ -7,6 +7,7 @@ import com.niko.ai_mafija_backend.dto.Response.CreateLobbyResponse;
 import com.niko.ai_mafija_backend.dto.Response.LobbyDetailsResponse;
 import com.niko.ai_mafija_backend.dto.Response.LobbyPlayerResponse;
 import com.niko.ai_mafija_backend.dto.Response.LobbyRoleResponse;
+import com.niko.ai_mafija_backend.dto.Response.PublicLobbyResponse;
 import com.niko.ai_mafija_backend.exception.BadRequestException;
 import com.niko.ai_mafija_backend.exception.ConflictException;
 import com.niko.ai_mafija_backend.exception.ErrorCode;
@@ -66,6 +67,9 @@ public class LobbyService {
                 .code(generateUniqueLobbyCode())
                 .status(GameRules.LOBBY_WAITING)
                 .maxPlayers(request.getMaxPlayers())
+                .mode(request.getMode() != null ? request.getMode() : GameRules.MODE_LIVE)
+                .isPublic(Boolean.TRUE.equals(request.getIsPublic()))
+                .voiceEnabled(request.getVoiceEnabled() == null || request.getVoiceEnabled())
                 .createdAt(OffsetDateTime.now())
                 .build();
 
@@ -77,6 +81,7 @@ public class LobbyService {
                 .isHost(true)
                 .isAlive(true)
                 .joinedAt(OffsetDateTime.now())
+                .avatarEmoji(cleanAvatar(request.getHostAvatarEmoji()))
                 .playerToken(UUID.randomUUID().toString())
                 .build();
 
@@ -108,6 +113,11 @@ public class LobbyService {
                 savedHostPlayer.getNickname(),
                 savedHostPlayer.getPlayerToken()
         );
+    }
+
+    /** Prazan avatar se sprema kao null; razmaci oko emojija se odbacuju */
+    public static String cleanAvatar(String avatarEmoji) {
+        return avatarEmoji == null || avatarEmoji.isBlank() ? null : avatarEmoji.trim();
     }
 
     private void validateRoleConfiguration(CreateLobbyRequest request) {
@@ -254,7 +264,25 @@ public class LobbyService {
                 gameState != null ? gameState.getPhase() : null,
                 gameState != null ? gameState.getRoundNumber() : null,
                 playerResponses,
-                roles
+                roles,
+                lobby.getHostPlayer() != null ? lobby.getHostPlayer().getId() : null,
+                lobby.getMode(),
+                lobby.getIsPublic(),
+                lobby.getVoiceEnabled()
         );
+    }
+
+    /** Javne sobe koje čekaju igrače: najnovije prve, najviše 20 */
+    public List<PublicLobbyResponse> getPublicLobbies() {
+        return lobbyRepository.findTop20ByStatusAndIsPublicTrueOrderByCreatedAtDesc(GameRules.LOBBY_WAITING).stream()
+                .map(lobby -> new PublicLobbyResponse(
+                        lobby.getCode(),
+                        lobby.getHostPlayer() != null ? lobby.getHostPlayer().getNickname() : null,
+                        lobby.getHostPlayer() != null ? lobby.getHostPlayer().getAvatarEmoji() : null,
+                        playerRepository.countByLobby(lobby),
+                        lobby.getMaxPlayers(),
+                        lobby.getMode(),
+                        lobby.getCreatedAt()))
+                .toList();
     }
 }

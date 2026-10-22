@@ -3,6 +3,8 @@ package com.niko.ai_mafija_backend.model;
 import jakarta.persistence.*;
 import lombok.*;
 
+import com.niko.ai_mafija_backend.service.GameRules;
+
 import java.time.OffsetDateTime;
 
 @Entity
@@ -41,8 +43,19 @@ public class Lobby {
     @JoinColumn(name = "host_player_id")
     private Player hostPlayer;
 
+    /** Način igre: LIVE ili ONLINE (GameRules.MODE_*) */
+    @Column(nullable = false)
+    @Builder.Default
+    private String mode = GameRules.MODE_LIVE;
 
+    /** Javna soba se pojavljuje na popisu javnih soba */
+    @Column(name = "is_public", nullable = false)
+    @Builder.Default
+    private Boolean isPublic = false;
 
-
+    /** Glas naratora */
+    @Column(name = "voice_enabled", nullable = false)
+    @Builder.Default
+    private Boolean voiceEnabled = true;
 
 }

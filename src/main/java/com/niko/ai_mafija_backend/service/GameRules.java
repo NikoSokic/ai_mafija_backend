@@ -43,6 +43,10 @@ public final class GameRules {
     public static final String LOBBY_IN_PROGRESS = "IN_PROGRESS";
     public static final String LOBBY_FINISHED = "FINISHED";
 
+    // ---------- način igre ----------
+    public static final String MODE_LIVE = "LIVE";
+    public static final String MODE_ONLINE = "ONLINE";
+
     // ---------- kako je igrač ispao ----------
     public static final String ELIMINATED_NIGHT = "NIGHT";
     public static final String ELIMINATED_VOTE = "VOTE";

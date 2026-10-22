@@ -1,19 +1,27 @@
 package com.niko.ai_mafija_backend;
 
 import com.jayway.jsonpath.JsonPath;
+import com.niko.ai_mafija_backend.dto.Response.HostChangedResponse;
+import com.niko.ai_mafija_backend.dto.Response.PlayerLeftResponse;
+import com.niko.ai_mafija_backend.dto.WebSocket.LobbyEventResponse;
 import com.niko.ai_mafija_backend.exception.ErrorCode;
+import com.niko.ai_mafija_backend.model.Lobby;
 import com.niko.ai_mafija_backend.model.Role;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.mockito.ArgumentCaptor;
 import org.springframework.http.HttpStatus;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.http.MediaType;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.nio.charset.StandardCharsets;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -27,6 +35,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atLeast;
+import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -40,6 +51,7 @@ class FullGameApiTests extends GameTestSupport {
 
     @Autowired private MockMvc mvc;
     @Autowired private JsonMapper json;
+    @MockitoSpyBean private SimpMessagingTemplate messagingTemplate;
 
     private final Map<String, Long> roleIds = new HashMap<>();
 
@@ -358,6 +370,199 @@ class FullGameApiTests extends GameTestSupport {
         assertEquals(List.of("Opis: Mafia"), read(roles, "$[?(@.name == 'Mafia')].opis"));
     }
 
+    // ---------- postavke sobe, avatar, domaćin, javne sobe, izlazak ----------
+
+    @Test
+    void lobbySettingsHaveDefaultsForOldClientsAndCanBeSet() throws Exception {
+        // stari klijent: nijedno novo polje nije poslano
+        createLobby(Map.of("Mafia", 1, "Građanin", 3));
+        String details = lobbyDetails(code);
+        assertEquals("LIVE", read(details, "$.mode"));
+        assertFalse(bool(details, "$.isPublic"));
+        assertTrue(bool(details, "$.voiceEnabled"));
+        assertEquals(host.id(), ((Number) read(details, "$.hostPlayerId")).longValue());
+        assertNull(playerField(details, host, "avatarEmoji"));
+        assertTrue(bool(details, "$.players[0].host"));
+        // sastav uloga
+        List<String> roleNames = read(details, "$.roles[*].roleName");
+        assertEquals(List.of("Građanin", "Mafia"), roleNames.stream().sorted().toList());
+        List<Number> counts = read(details, "$.roles[*].count");
+        assertEquals(4, counts.stream().mapToInt(Number::intValue).sum());
+        List<Number> mafiaRoleId = read(details, "$.roles[?(@.roleName == 'Mafia')].roleId");
+        assertEquals(roleIds.get("Mafia"), mafiaRoleId.getFirst().longValue());
+
+        String custom = create("Niko", Map.of("mode", "ONLINE", "isPublic", true, "voiceEnabled", false,
+                "hostAvatarEmoji", "🦊"));
+        details = lobbyDetails(read(custom, "$.code"));
+        assertEquals("ONLINE", read(details, "$.mode"));
+        assertTrue(bool(details, "$.isPublic"));
+        assertFalse(bool(details, "$.voiceEnabled"));
+        assertEquals("🦊", read(details, "$.players[0].avatarEmoji"));
+    }
+
+    @Test
+    void invalidSettingsAndAvatarsAreRejected() throws Exception {
+        expectError(post("/api/lobbies", lobbyBody("Niko", Map.of("Mafia", 1, "Građanin", 3), Map.of("mode", "PUTEM"))),
+                HttpStatus.BAD_REQUEST, VALIDATION_ERROR);
+        expectError(post("/api/lobbies", lobbyBody("Niko", Map.of("Mafia", 1, "Građanin", 3),
+                Map.of("hostAvatarEmoji", "A".repeat(9)))), HttpStatus.BAD_REQUEST, VALIDATION_ERROR);
+        // točno 8 znakova prolazi; prazan avatar znači "bez avatara"
+        create("Niko", Map.of("hostAvatarEmoji", "A".repeat(8)));
+        String blank = create("Prazno", Map.of("hostAvatarEmoji", "  "));
+        assertNull(playerField(lobbyDetails(read(blank, "$.code")), seatOf(blank, "$.hostPlayerId"), "avatarEmoji"));
+
+        createLobby(Map.of("Mafia", 1, "Građanin", 3));
+        expectError(post(lobbyPath() + "/join", Map.of("nickname", "Ana", "avatarEmoji", "A".repeat(9))),
+                HttpStatus.BAD_REQUEST, VALIDATION_ERROR);
+    }
+
+    @Test
+    void avatarsAreVisibleInLobbyPlayersAndGameState() throws Exception {
+        String created = create("Niko", Map.of("hostAvatarEmoji", "🦊"));
+        code = read(created, "$.code");
+        host = seatOf(created, "$.hostPlayerId");
+        seats.add(host);
+        String joined = ok(post(lobbyPath() + "/join", Map.of("nickname", "Ana", "avatarEmoji", "🐼")));
+        Seat ana = new Seat(((Number) read(joined, "$.playerId")).longValue(), read(joined, "$.playerToken"));
+        seats.add(ana);
+        joinAll(4);
+
+        assertEquals("🐼", playerField(lobbyDetails(code), ana, "avatarEmoji"));
+        String players = ok(mvc.perform(get(lobbyPath() + "/players")));
+        assertEquals("🦊", playerFieldOfList(players, host, "avatarEmoji"));
+        assertEquals("🐼", playerFieldOfList(players, ana, "avatarEmoji"));
+        assertNull(playerFieldOfList(players, seats.getLast(), "avatarEmoji"));
+
+        ok(post(lobbyPath() + "/start", auth(host)));
+        // igra je počela: i privatno i javno stanje (WebSocket) nose avatar
+        assertEquals("🐼", playerField(gameState(host), ana, "avatarEmoji"));
+        assertEquals("🦊", playerField(gameState(ana), host, "avatarEmoji"));
+        assertEquals("🐼", gameStateService.getPublicGameState(code).players().stream()
+                .filter(player -> player.getId().equals(ana.id())).findFirst().orElseThrow().getAvatarEmoji());
+    }
+
+    @Test
+    void publicLobbiesListOnlyWaitingPublicRoomsNewestFirst() throws Exception {
+        String alfa = create("Alfa", Map.of("isPublic", true, "hostAvatarEmoji", "🦊"));
+        create("Beta", Map.of());
+        String gama = create("Gama", Map.of("isPublic", true));
+        String delta = create("Delta", Map.of("isPublic", true, "mode", "ONLINE"));
+
+        ok(post("/api/lobbies/" + read(alfa, "$.code") + "/join", Map.of("nickname", "Gost")));
+        // Gama je javna, ali igra je počela, pa ne smije biti na popisu
+        String gamaCode = read(gama, "$.code");
+        for (int i = 0; i < 3; i++) {
+            ok(post("/api/lobbies/" + gamaCode + "/join", Map.of("nickname", "G" + i)));
+        }
+        ok(post("/api/lobbies/" + gamaCode + "/start", auth(seatOf(gama, "$.hostPlayerId"))));
+
+        String list = ok(mvc.perform(get("/api/lobbies").param("public", "true")));
+        assertEquals(List.of(read(delta, "$.code"), read(alfa, "$.code")), read(list, "$[*].code"));
+        assertEquals("Delta", read(list, "$[0].hostNickname"));
+        assertNull(read(list, "$[0].hostAvatarEmoji"));
+        assertEquals(1, (int) read(list, "$[0].playerCount"));
+        assertEquals(4, (int) read(list, "$[0].maxPlayers"));
+        assertEquals("ONLINE", read(list, "$[0].mode"));
+        assertTrue(read(list, "$[0].createdAt") != null);
+        assertEquals("🦊", read(list, "$[1].hostAvatarEmoji"));
+        assertEquals(2, (int) read(list, "$[1].playerCount"));
+        assertEquals("LIVE", read(list, "$[1].mode"));
+
+        // privatne sobe se ne izlistavaju
+        expectError(mvc.perform(get("/api/lobbies").param("public", "false")),
+                HttpStatus.BAD_REQUEST, VALIDATION_ERROR);
+    }
+
+    @Test
+    void publicLobbyListIsLimitedToTwentyNewest() throws Exception {
+        OffsetDateTime base = OffsetDateTime.now();
+        for (int i = 1; i <= 21; i++) {
+            lobbyRepository.save(Lobby.builder().code("P" + i).status("WAITING").maxPlayers(4)
+                    .isPublic(true).createdAt(base.plusSeconds(i)).build());
+        }
+
+        String list = ok(mvc.perform(get("/api/lobbies").param("public", "true")));
+
+        List<String> codes = read(list, "$[*].code");
+        assertEquals(20, codes.size());
+        assertEquals("P21", codes.getFirst());
+        assertEquals("P2", codes.getLast());
+        // soba bez domaćina ne smije srušiti popis
+        assertNull(read(list, "$[0].hostNickname"));
+        assertEquals(0, (int) read(list, "$[0].playerCount"));
+    }
+
+    @Test
+    void leavingWaitingLobbyFreesNicknameAndHandsOverHost() throws Exception {
+        createLobby(Map.of("Mafia", 1, "Građanin", 3));
+        Seat first = joinSeat("Prvi");
+        Seat second = joinSeat("Drugi");
+
+        // zadnji koji je ušao izlazi: nadimak se oslobađa
+        ok(post(lobbyPath() + "/leave", auth(second)));
+        assertEquals(2, ((List<?>) read(lobbyDetails(code), "$.players")).size());
+        Seat again = joinSeat("Drugi");
+        // igrač je obrisan, pa ni stari token ne vrijedi
+        expectError(post(lobbyPath() + "/leave", auth(second)), HttpStatus.NOT_FOUND, PLAYER_NOT_FOUND);
+        expectError(post(lobbyPath() + "/leave", Map.of("playerId", first.id(), "playerToken", "kriv")),
+                HttpStatus.UNAUTHORIZED, INVALID_TOKEN);
+
+        // domaćin izlazi: domaćin postaje onaj tko je najduže u sobi
+        ok(post(lobbyPath() + "/leave", auth(host)));
+        String details = lobbyDetails(code);
+        assertEquals(first.id(), ((Number) read(details, "$.hostPlayerId")).longValue());
+        assertEquals(Boolean.TRUE, playerField(details, first, "host"));
+        assertEquals(Boolean.FALSE, playerField(details, again, "host"));
+
+        // događaji
+        assertEquals(List.of(second.id(), host.id()), events("PLAYER_LEFT").stream()
+                .map(event -> ((PlayerLeftResponse) event.getData()).playerId()).toList());
+        List<LobbyEventResponse> hostChanged = events("HOST_CHANGED");
+        assertEquals(1, hostChanged.size());
+        assertEquals(first.id(), ((HostChangedResponse) hostChanged.getFirst().getData()).hostPlayerId());
+
+        // kad izađu svi, soba se briše
+        ok(post(lobbyPath() + "/leave", auth(first)));
+        ok(post(lobbyPath() + "/leave", auth(again)));
+        expectError(mvc.perform(get(lobbyPath())), HttpStatus.NOT_FOUND, LOBBY_NOT_FOUND);
+    }
+
+    @Test
+    void leavingWithAnotherLobbyCodeIsForbidden() throws Exception {
+        createLobby(Map.of("Mafia", 1, "Građanin", 3));
+        String other = create("Drugi", Map.of());
+        expectError(post("/api/lobbies/" + read(other, "$.code") + "/leave", auth(host)),
+                HttpStatus.FORBIDDEN, NOT_IN_LOBBY);
+        expectError(post("/api/lobbies/NEMA00/leave", auth(host)), HttpStatus.NOT_FOUND, LOBBY_NOT_FOUND);
+    }
+
+    @Test
+    void leavingDuringGameReturnsGameInProgress() throws Exception {
+        createAndStart(Map.of("Mafia", 1, "Građanin", 3));
+        Seat citizen = byRole.get("Građanin").getFirst();
+
+        expectError(post(lobbyPath() + "/leave", auth(citizen)), HttpStatus.CONFLICT, GAME_IN_PROGRESS);
+        expectError(post(lobbyPath() + "/leave", auth(host)), HttpStatus.CONFLICT, GAME_IN_PROGRESS);
+
+        // igrač je i dalje u igri, s važećim tokenom
+        String state = gameState(citizen);
+        assertTrue(bool(state, "$.currentPlayer.alive"));
+        assertEquals(4, ((List<?>) read(state, "$.players")).size());
+        assertEquals(List.of(), events("PLAYER_LEFT"));
+    }
+
+    @Test
+    void swaggerDocumentsNewEndpointsAndFields() throws Exception {
+        String docs = ok(mvc.perform(get("/v3/api-docs")));
+        assertTrue(docs.contains("\"/api/lobbies\""));
+        assertTrue(docs.contains("\"/api/lobbies/{code}/leave\""));
+        assertTrue(docs.contains("Popis javnih soba"));
+        assertTrue(docs.contains("GAME_IN_PROGRESS"));
+        assertTrue(docs.contains("hostAvatarEmoji"));
+        assertTrue(docs.contains("voiceEnabled"));
+        assertTrue(docs.contains("hostPlayerId"));
+    }
+
     // ---------- soba ----------
 
     private void createAndStart(Map<String, Integer> composition) throws Exception {
@@ -379,6 +584,43 @@ class FullGameApiTests extends GameTestSupport {
         code = read(created, "$.code");
         host = new Seat(((Number) read(created, "$.hostPlayerId")).longValue(), read(created, "$.playerToken"));
         seats.add(host);
+    }
+
+    private Map<String, Object> lobbyBody(String hostNickname, Map<String, Integer> composition,
+                                          Map<String, Object> extra) {
+        Map<String, Object> body = lobbyBody(hostNickname, composition);
+        body.putAll(extra);
+        return body;
+    }
+
+    /** Stvori još jednu sobu (4 igrača) s dodatnim poljima zahtjeva; vraća JSON odgovor */
+    private String create(String hostNickname, Map<String, Object> extra) throws Exception {
+        return ok(post("/api/lobbies", lobbyBody(hostNickname, Map.of("Mafia", 1, "Građanin", 3), extra)));
+    }
+
+    private String lobbyDetails(String lobbyCode) throws Exception {
+        return ok(mvc.perform(get("/api/lobbies/" + lobbyCode)));
+    }
+
+    /** Domaćin iz odgovora na stvaranje sobe */
+    private static Seat seatOf(String created, String idPath) {
+        return new Seat(((Number) read(created, idPath)).longValue(), read(created, "$.playerToken"));
+    }
+
+    private Seat joinSeat(String nickname) throws Exception {
+        String joined = ok(join(nickname));
+        return new Seat(((Number) read(joined, "$.playerId")).longValue(), read(joined, "$.playerToken"));
+    }
+
+    /** Događaji tipa type koje je server poslao na temu sobe (tek nakon commita) */
+    private List<LobbyEventResponse> events(String type) {
+        ArgumentCaptor<Object> payloads = ArgumentCaptor.forClass(Object.class);
+        verify(messagingTemplate, atLeast(0)).convertAndSend(eq("/topic/lobby/" + code), payloads.capture());
+        return payloads.getAllValues().stream()
+                .filter(LobbyEventResponse.class::isInstance)
+                .map(LobbyEventResponse.class::cast)
+                .filter(event -> type.equals(event.getType()))
+                .toList();
     }
 
     private Map<String, Object> lobbyBody(String hostNickname, Map<String, Integer> composition) {
@@ -453,6 +695,11 @@ class FullGameApiTests extends GameTestSupport {
 
     private boolean alive(String state, Seat seat) {
         return Boolean.TRUE.equals(playerField(state, seat, "alive"));
+    }
+
+    private Object playerFieldOfList(String players, Seat seat, String field) {
+        List<Object> values = JsonPath.read(players, "$[?(@.id == " + seat.id() + ")]." + field);
+        return values.getFirst();
     }
 
     private Object playerField(String state, Seat seat, String field) {
