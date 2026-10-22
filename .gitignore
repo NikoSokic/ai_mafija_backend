@@ -1,6 +1,14 @@
-HELP.md
-.gradle
+### Projekt ###
 build/
+.gradle/
+.idea/
+*.iml
+out/
+# lozinke i ključevi (SPRING_DATASOURCE_PASSWORD…) idu samo u env varijable
+.env
+.env.*
+
+HELP.md
 !gradle/wrapper/gradle-wrapper.jar
 !**/src/main/**/build/
 !**/src/test/**/build/
