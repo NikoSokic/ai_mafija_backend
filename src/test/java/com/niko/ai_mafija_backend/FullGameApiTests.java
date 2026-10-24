@@ -5,6 +5,7 @@ import com.niko.ai_mafija_backend.dto.Response.HostChangedResponse;
 import com.niko.ai_mafija_backend.dto.Response.LastNightResponse;
 import com.niko.ai_mafija_backend.dto.Response.LobbyPlayerResponse;
 import com.niko.ai_mafija_backend.dto.Response.PlayerLeftResponse;
+import com.niko.ai_mafija_backend.dto.Response.PlayerReadyResponse;
 import com.niko.ai_mafija_backend.dto.Response.PublicGameStateResponse;
 import com.niko.ai_mafija_backend.dto.Response.ResolveNightResponse;
 import com.niko.ai_mafija_backend.dto.Response.ResolveVoteResponse;
@@ -470,6 +471,182 @@ class FullGameApiTests extends GameTestSupport {
         timeout();
     }
 
+    // ---------- spreman sam ----------
+
+    @Test
+    void firstNightStartsAsSoonAsEveryoneIsReady() throws Exception {
+        createAndStart(Map.of("Mafia", 1, "Građanin", 3));
+        assertEquals(List.of(), longs(read(gameState(host), "$.readyPlayerIds")));
+        assertEquals(List.of(), gameStateService.getPublicGameState(code).readyPlayerIds());
+
+        Seat first = seats.get(0);
+        Seat second = seats.get(1);
+        String ready = ok(post(lobbyPath() + "/ready", auth(first)));
+        assertEquals(first.id(), ((Number) read(ready, "$.playerId")).longValue());
+        assertEquals(1, (int) read(ready, "$.readyCount"));
+        assertEquals(4, (int) read(ready, "$.readyTotal"));
+        // ponovni poziv nije greška i ništa ne mijenja
+        assertEquals(1, (int) read(ok(post(lobbyPath() + "/ready", auth(first))), "$.readyCount"));
+
+        ok(post(lobbyPath() + "/ready", auth(second)));
+        assertEquals(ids(first, second), longs(read(gameState(seats.get(2)), "$.readyPlayerIds")));
+        assertEquals(ids(first, second), gameStateService.getPublicGameState(code).readyPlayerIds());
+        ok(post(lobbyPath() + "/ready", auth(seats.get(2))));
+        assertNull(turn());
+        assertRolesHidden();
+
+        // zadnji spreman: prvi potez počinje odmah, bez čekanja roka
+        ok(post(lobbyPath() + "/ready", auth(seats.get(3))));
+        String state = gameState(host);
+        assertEquals("MAFIA", read(state, "$.currentTurnRole"));
+        assertNull(read(state, "$.readyPlayerIds"));
+        assertNull(gameStateService.getPublicGameState(code).readyPlayerIds());
+        expectError(post(lobbyPath() + "/ready", auth(first)), HttpStatus.CONFLICT, WRONG_PHASE);
+        expectError(post(lobbyPath() + "/begin-night", auth(host)), HttpStatus.CONFLICT, WRONG_PHASE);
+
+        List<PlayerReadyResponse> readyEvents = events("PLAYER_READY").stream()
+                .map(event -> (PlayerReadyResponse) event.getData())
+                .toList();
+        assertEquals(seats.stream().map(Seat::id).toList(), readyEvents.stream().map(PlayerReadyResponse::playerId).toList());
+        assertEquals(List.of(1, 2, 3, 4), readyEvents.stream().map(PlayerReadyResponse::readyCount).toList());
+        assertTrue(readyEvents.stream().allMatch(event -> event.readyTotal() == 4));
+    }
+
+    @Test
+    void hostCanBeginFirstNightBeforeEveryoneIsReady() throws Exception {
+        createLobby(Map.of("Mafia", 1, "Građanin", 3));
+        joinAll(4);
+        expectError(post(lobbyPath() + "/ready", auth(host)), HttpStatus.CONFLICT, GAME_NOT_STARTED);
+        ok(post(lobbyPath() + "/start", auth(host)));
+
+        ok(post(lobbyPath() + "/ready", auth(host)));
+        expectError(post(lobbyPath() + "/begin-night", auth(seats.get(1))), HttpStatus.FORBIDDEN, NOT_HOST);
+        assertNull(turn());
+
+        ok(post(lobbyPath() + "/begin-night", auth(host)));
+        assertEquals("MAFIA", turn());
+        assertNull(read(gameState(host), "$.readyPlayerIds"));
+    }
+
+    @Test
+    void firstNightIntroEndsAtDeadlineEvenIfNotEveryoneIsReady() throws Exception {
+        createAndStart(Map.of("Mafia", 1, "Građanin", 3));
+        ok(post(lobbyPath() + "/ready", auth(host)));
+        assertNull(turn());
+
+        // netko je zatvorio aplikaciju: istekne sigurnosni rok od 90 s
+        timeout();
+        assertEquals("MAFIA", turn());
+    }
+
+    // ---------- igraj ponovno ----------
+
+    @Test
+    void rematchStartsSecondGameInSameLobby() throws Exception {
+        createAndStart(Map.of("Mafia", 1, "Građanin", 3));
+        Seat notHost = seats.get(1);
+        expectError(post(lobbyPath() + "/rematch", auth(host)), HttpStatus.CONFLICT, WRONG_PHASE);
+
+        // prva igra: uvod istekne, građani izbace Mafiju
+        timeout();
+        citizensVoteOutMafia();
+        assertEquals("CITIZENS_WIN", read(gameState(host), "$.winner"));
+        long oldStateId = gameStateRepository.findByLobby(currentLobby()).orElseThrow().getId();
+
+        expectError(post(lobbyPath() + "/rematch", auth(notHost)), HttpStatus.FORBIDDEN, NOT_HOST);
+        expectError(post(lobbyPath() + "/ready", auth(host)), HttpStatus.CONFLICT, GAME_FINISHED);
+        ok(post(lobbyPath() + "/rematch", auth(host)));
+
+        // soba čeka novu igru: svi živi, bez uloga i bez rezultata prošle igre
+        String details = lobbyDetails(code);
+        assertEquals("WAITING", read(details, "$.status"));
+        assertNull(read(details, "$.phase"));
+        assertEquals(host.id(), ((Number) read(details, "$.hostPlayerId")).longValue());
+        // sastav uloga ostaje
+        List<Number> roleCounts = read(details, "$.roles[*].count");
+        assertEquals(4, roleCounts.stream().mapToInt(Number::intValue).sum());
+        String state = gameState(host);
+        assertEquals("WAITING", read(state, "$.lobbyStatus"));
+        assertNull(read(state, "$.phase"));
+        assertFalse(bool(state, "$.gameFinished"));
+        assertNull(read(state, "$.winner"));
+        assertNull(read(state, "$.currentPlayer.role"));
+        assertAllNull(read(state, "$.players[*].roleName"));
+        assertAllNull(read(state, "$.players[*].eliminatedHow"));
+        assertEquals(seats.stream().map(seat -> true).toList(), read(state, "$.players[*].alive"));
+        assertEquals(1, events("REMATCH").size());
+        assertEquals(0L, gameActionRepository.count());
+        assertEquals(0L, voteRepository.count());
+
+        // timer stare igre više ne nalazi
+        gamePhaseService.handleTimeout(oldStateId);
+        assertEquals("WAITING", currentLobby().getStatus());
+        expectError(post(lobbyPath() + "/rematch", auth(host)), HttpStatus.CONFLICT, WRONG_PHASE);
+
+        // druga igra: isti sastav, nove uloge, uvod završava kad su svi spremni
+        ok(post(lobbyPath() + "/start", auth(host)));
+        readRoles();
+        assertEquals(List.of(1, 3), List.of(byRole.get("Mafia").size(), byRole.get("Građanin").size()));
+        assertRolesHidden();
+        assertEquals(List.of(), longs(read(gameState(host), "$.readyPlayerIds")));
+        for (Seat seat : seats) {
+            ok(post(lobbyPath() + "/ready", auth(seat)));
+        }
+        assertEquals("MAFIA", turn());
+        citizensVoteOutMafia();
+
+        state = gameState(host);
+        assertEquals("FINISHED", read(state, "$.phase"));
+        assertEquals(1, (int) read(state, "$.roundNumber"));
+        assertEquals("CITIZENS_WIN", read(state, "$.winner"));
+        assertRolesRevealed();
+    }
+
+    @Test
+    void rematchRemovesPlayersWhoLeftAndWaitsForNewOnes() throws Exception {
+        createAndStart(Map.of("Mafia", 1, "Građanin", 3));
+        timeout();
+        citizensVoteOutMafia();
+
+        // nakon kraja igre jedan igrač izađe iz sobe
+        Seat leaver = seats.get(1);
+        ok(post(lobbyPath() + "/leave", auth(leaver)));
+        ok(post(lobbyPath() + "/rematch", auth(host)));
+        seats.remove(leaver);
+
+        assertEquals(seats.stream().map(Seat::id).toList(), longs(read(lobbyDetails(code), "$.players[*].id")));
+        expectError(post(lobbyPath() + "/leave", auth(leaver)), HttpStatus.NOT_FOUND, PLAYER_NOT_FOUND);
+        // kao i prije prve igre: domaćin čeka da se soba popuni
+        expectError(post(lobbyPath() + "/start", auth(host)), HttpStatus.CONFLICT, LOBBY_NOT_FULL);
+
+        seats.add(joinSeat("Novi"));
+        ok(post(lobbyPath() + "/start", auth(host)));
+        readRoles();
+        ok(post(lobbyPath() + "/begin-night", auth(host)));
+        assertEquals("MAFIA", turn());
+        citizensVoteOutMafia();
+        assertEquals("CITIZENS_WIN", read(gameState(host), "$.winner"));
+    }
+
+    /** Od poteza mafije (Mafija i 3 građanina): nitko ne strada, pa građani izglasaju Mafiju */
+    private void citizensVoteOutMafia() throws Exception {
+        Seat mafia = role("Mafia");
+        List<Seat> citizens = byRole.get("Građanin");
+        assertEquals("MAFIA", turn());
+        timeout();
+        assertEquals("DAY", read(gameState(host), "$.phase"));
+        timeout();
+        assertEquals("VOTING", read(gameState(host), "$.phase"));
+        for (Seat citizen : citizens) {
+            ok(castVote(citizen, mafia));
+        }
+        assertEquals("CITIZENS_WIN", read(ok(castVote(mafia, citizens.getFirst())), "$.resolveResult.result"));
+    }
+
+    private Lobby currentLobby() {
+        return lobbyRepository.findByCode(code).orElseThrow();
+    }
+
     // ---------- soba i kodovi grešaka ----------
 
     @Test
@@ -724,6 +901,10 @@ class FullGameApiTests extends GameTestSupport {
         assertTrue(docs.contains("hostAvatarEmoji"));
         assertTrue(docs.contains("voiceEnabled"));
         assertTrue(docs.contains("hostPlayerId"));
+        assertTrue(docs.contains("\"/api/lobbies/{code}/ready\""));
+        assertTrue(docs.contains("\"/api/lobbies/{code}/begin-night\""));
+        assertTrue(docs.contains("\"/api/lobbies/{code}/rematch\""));
+        assertTrue(docs.contains("readyPlayerIds"));
     }
 
     // ---------- soba ----------
@@ -732,6 +913,13 @@ class FullGameApiTests extends GameTestSupport {
         createLobby(composition);
         joinAll(composition.values().stream().mapToInt(Integer::intValue).sum());
         ok(post(lobbyPath() + "/start", auth(host)));
+        readRoles();
+    }
+
+    /** Uloge koje je server dodijelio (nakon svakog START-a, i u novoj igri iste sobe) */
+    private void readRoles() throws Exception {
+        byRole.clear();
+        roleOf.clear();
         for (Seat seat : seats) {
             String roleName = read(gameState(seat), "$.currentPlayer.role");
             byRole.computeIfAbsent(roleName, name -> new ArrayList<>()).add(seat);

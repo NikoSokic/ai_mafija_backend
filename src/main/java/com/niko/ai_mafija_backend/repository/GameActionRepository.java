@@ -28,4 +28,7 @@ public interface GameActionRepository extends JpaRepository<GameAction, Long> {
             Integer roundNumber
     );
 
+    /** Sve noćne akcije sobe – za novu igru u istoj sobi */
+    void deleteByLobby(Lobby lobby);
+
 }

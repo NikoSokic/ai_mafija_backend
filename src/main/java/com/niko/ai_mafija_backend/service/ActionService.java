@@ -2,7 +2,9 @@ package com.niko.ai_mafija_backend.service;
 
 import com.niko.ai_mafija_backend.dto.Requests.ActionRequest;
 import com.niko.ai_mafija_backend.dto.Requests.HostActionRequest;
+import com.niko.ai_mafija_backend.dto.Requests.PlayerAuthRequest;
 import com.niko.ai_mafija_backend.dto.Response.ActionResponse;
+import com.niko.ai_mafija_backend.dto.Response.PlayerReadyResponse;
 import com.niko.ai_mafija_backend.dto.Response.ResolveNightResponse;
 import com.niko.ai_mafija_backend.exception.BadRequestException;
 import com.niko.ai_mafija_backend.exception.ConflictException;
@@ -161,7 +163,70 @@ public class ActionService {
         return resolveNight(lobby, gameState);
     }
 
-    /** Početak noći: uvodna pauza (na prvoj noći igrači gledaju svoju ulogu), pa prvi potez. */
+    /**
+     * "Spreman sam" u uvodu prve noći. Kad su spremni svi živi igrači, odmah počinje prvi potez.
+     * Ponovni poziv nije greška: ništa se ne mijenja i ne šalje se novi događaj.
+     */
+    @Transactional
+    public PlayerReadyResponse markReady(String lobbyCode, PlayerAuthRequest request) {
+        Lobby lobby = lobbyRepository.findByCode(lobbyCode)
+                .orElseThrow(() -> new ResourceNotFoundException(ErrorCode.LOBBY_NOT_FOUND, "Lobby ne postoji."));
+        Player player = playerAuthService.authenticate(request.playerId(), request.playerToken());
+        if (!player.getLobby().getId().equals(lobby.getId())) {
+            throw new ForbiddenException(ErrorCode.NOT_IN_LOBBY, "Igrač ne pripada ovom lobbyju.");
+        }
+        GameState gameState = lockGameState(lobby);
+        assertFirstNightIntro(gameState, "Spreman se može javiti samo u uvodu prve noći.");
+        if (!isAlive(player)) {
+            throw new ForbiddenException(ErrorCode.DEAD_PLAYER, "Mrtav igrač ne može javiti da je spreman.");
+        }
+
+        if (Boolean.TRUE.equals(player.getIsReady())) {
+            return readyCounts(lobby, player);
+        }
+        player.setIsReady(true);
+        playerRepository.save(player);
+
+        PlayerReadyResponse response = readyCounts(lobby, player);
+        webSocketService.publishLobbyEventAfterCommit(lobby.getCode(), "PLAYER_READY", "Igrač je spreman.", response);
+        if (response.readyCount() >= response.readyTotal()) {
+            advanceTurn(lobby, gameState);
+        } else {
+            webSocketService.publishGameStateChangedAfterCommit(lobby.getCode());
+        }
+        return response;
+    }
+
+    /** Domaćin preskače uvod prve noći: prvi potez počinje odmah, i kad nisu svi spremni. */
+    @Transactional
+    public void beginNightAsHost(String lobbyCode, HostActionRequest request) {
+        Lobby lobby = lobbyRepository.findByCode(lobbyCode)
+                .orElseThrow(() -> new ResourceNotFoundException(ErrorCode.LOBBY_NOT_FOUND, "Lobby ne postoji."));
+        playerAuthService.authenticateHostForLobby(request.playerId(), request.playerToken(), lobby);
+        GameState gameState = lockGameState(lobby);
+        assertFirstNightIntro(gameState, "Noć se može pokrenuti samo u uvodu prve noći.");
+        advanceTurn(lobby, gameState);
+    }
+
+    private void assertFirstNightIntro(GameState gameState, String message) {
+        if (FINISHED.equals(gameState.getPhase())) {
+            throw new ConflictException(ErrorCode.GAME_FINISHED, "Igra je završena.");
+        }
+        if (!isFirstNightIntro(gameState)) {
+            throw new ConflictException(ErrorCode.WRONG_PHASE, message);
+        }
+    }
+
+    private PlayerReadyResponse readyCounts(Lobby lobby, Player player) {
+        List<Player> alive = playerRepository.findByLobbyAndIsAliveTrue(lobby);
+        int readyCount = (int) alive.stream().filter(other -> Boolean.TRUE.equals(other.getIsReady())).count();
+        return new PlayerReadyResponse(player.getId(), readyCount, alive.size());
+    }
+
+    /**
+     * Početak noći: uvodna pauza, pa prvi potez. Na prvoj noći igrači gledaju svoju ulogu; uvod završava kad su
+     * svi spremni, kad domaćin preskoči ili najkasnije nakon FIRST_NIGHT_INTRO_MAX.
+     */
     public void startNight(Lobby lobby, GameState gameState, int roundNumber) {
         OffsetDateTime now = OffsetDateTime.now();
         gameState.setPhase(NIGHT);
@@ -170,7 +235,7 @@ public class ActionService {
         gameState.setTieBreakPlayerIds(null);
         gameState.setNightKilledPlayerIds(null);
         gameState.setNightSilencedPlayerIds(null);
-        gameState.setPhaseEndsAt(now.plus(roundNumber == 1 ? FIRST_NIGHT_INTRO : NIGHT_INTRO));
+        gameState.setPhaseEndsAt(now.plus(roundNumber == 1 ? FIRST_NIGHT_INTRO_MAX : NIGHT_INTRO));
         gameState.setUpdateAt(now);
         gameStateRepository.save(gameState);
         webSocketService.publishGameStateChangedAfterCommit(lobby.getCode());

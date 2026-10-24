@@ -68,7 +68,8 @@ public class GameStateService {
                 gameState != null ? rules.silencedPlayerIds(lobby, gameState) : List.of(),
                 nightKilledPlayerIds(gameState),
                 publicTurn(gameState),
-                lastNight(gameState)
+                lastNight(gameState),
+                readyPlayerIds(gameState, players)
         );
     }
 
@@ -95,7 +96,8 @@ public class GameStateService {
                 nightKilledPlayerIds(gameState),
                 votingOpen ? getPublicVoting(lobby, gameState) : null,
                 publicTurn(gameState),
-                lastNight(gameState)
+                lastNight(gameState),
+                readyPlayerIds(gameState, players)
         );
     }
 
@@ -207,6 +209,19 @@ public class GameStateService {
                 gameState.getRoundNumber(),
                 GameRulesService.parseIds(gameState.getNightKilledPlayerIds()),
                 GameRulesService.parseIds(gameState.getNightSilencedPlayerIds()));
+    }
+
+    /** Tko je spreman vidi se samo u uvodu prve noći; inače null */
+    private List<Long> readyPlayerIds(GameState gameState, List<Player> players) {
+        if (!isFirstNightIntro(gameState)) {
+            return null;
+        }
+        return players.stream()
+                .filter(GameRules::isAlive)
+                .filter(player -> Boolean.TRUE.equals(player.getIsReady()))
+                .map(Player::getId)
+                .sorted()
+                .toList();
     }
 
     private List<Long> nightKilledPlayerIds(GameState gameState) {

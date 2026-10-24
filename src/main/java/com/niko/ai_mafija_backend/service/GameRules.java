@@ -1,5 +1,6 @@
 package com.niko.ai_mafija_backend.service;
 
+import com.niko.ai_mafija_backend.model.GameState;
 import com.niko.ai_mafija_backend.model.Player;
 
 import java.time.Duration;
@@ -25,8 +26,11 @@ public final class GameRules {
     public static final Duration NIGHT_TURN = Duration.ofSeconds(20);
     /** narator uspava prethodnu ulogu i budi ovu prije njezinog odabira */
     public static final Duration TURN_NARRATION = Duration.ofSeconds(6);
-    /** prva noć: igrači još gledaju kartu uloge */
-    public static final Duration FIRST_NIGHT_INTRO = Duration.ofSeconds(30);
+    /**
+     * prva noć: igrači gledaju kartu uloge; uvod završava kad su svi živi spremni ili kad domaćin preskoči,
+     * a ovo je sigurnosni rok da igra ne zapne ako netko zatvori aplikaciju
+     */
+    public static final Duration FIRST_NIGHT_INTRO_MAX = Duration.ofSeconds(90);
     /** ostale noći: prijelaz i naracija */
     public static final Duration NIGHT_INTRO = Duration.ofSeconds(10);
 
@@ -92,6 +96,14 @@ public final class GameRules {
     /** Glasanje je otvoreno u prvom glasanju i u ponovnom glasanju kod izjednačenja */
     public static boolean isVotingPhase(String phase) {
         return VOTING_PHASE.equals(phase) || TIE_BREAK.equals(phase);
+    }
+
+    /** Uvod prve noći: igrači gledaju uloge i javljaju "Spreman sam"; nitko još nije na redu */
+    public static boolean isFirstNightIntro(GameState gameState) {
+        return gameState != null
+                && NIGHT.equals(gameState.getPhase())
+                && Integer.valueOf(1).equals(gameState.getRoundNumber())
+                && gameState.getCurrentTurnRole() == null;
     }
 
     /** Dan u širem smislu: rasprava i glasanje. Tada vrijede utišanost i jutarnji izvještaj. */

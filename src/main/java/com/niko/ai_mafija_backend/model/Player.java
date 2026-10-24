@@ -51,4 +51,9 @@ public class Player {
     @Column(name = "avatar_emoji", length = 8)
     private String avatarEmoji;
 
+    /** Spreman u uvodu prve noći (pogledao je ulogu); kad su svi živi spremni, noć počinje odmah */
+    @Column(name = "is_ready", nullable = false)
+    @Builder.Default
+    private Boolean isReady = false;
+
 }

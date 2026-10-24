@@ -9,9 +9,11 @@ import com.niko.ai_mafija_backend.dto.Response.CreateLobbyResponse;
 import com.niko.ai_mafija_backend.dto.Response.JoinLobbyResponse;
 import com.niko.ai_mafija_backend.dto.Response.LobbyDetailsResponse;
 import com.niko.ai_mafija_backend.dto.Response.LobbyPlayerResponse;
+import com.niko.ai_mafija_backend.dto.Response.PlayerReadyResponse;
 import com.niko.ai_mafija_backend.dto.Response.PublicLobbyResponse;
 import com.niko.ai_mafija_backend.exception.BadRequestException;
 import com.niko.ai_mafija_backend.exception.ErrorCode;
+import com.niko.ai_mafija_backend.service.ActionService;
 import com.niko.ai_mafija_backend.service.LobbyService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -36,6 +38,7 @@ public class LobbyController {
     private final PlayerService playerService;
     private final GameStateService gameStateService;
     private final VoteService voteService;
+    private final ActionService actionService;
 
     @Operation(summary = "Stvori sobu",
             description = "Domaćin dobiva playerId i playerToken. Postavke mode (LIVE|ONLINE, zadano LIVE), "
@@ -80,6 +83,44 @@ public class LobbyController {
             @PathVariable String code,
             @Valid @RequestBody HostActionRequest request) {
         lobbyService.startLobby(code, request);
+        return ResponseEntity.ok().build();
+    }
+
+    @Operation(summary = "Spreman sam",
+            description = "Samo u uvodu prve noći (phase NIGHT, roundNumber 1, currentTurnRole null). "
+                    + "Igrač je pogledao ulogu; događaj PLAYER_READY {playerId, readyCount, readyTotal}, a tko je spreman "
+                    + "vidi se u readyPlayerIds. Kad su spremni svi živi igrači, prvi potez počinje odmah. Ponovni poziv "
+                    + "nije greška (ništa se ne mijenja). Uvod najkasnije završava nakon 90 s. "
+                    + "Greške: 401 INVALID_TOKEN, 403 NOT_IN_LOBBY, 404 LOBBY_NOT_FOUND, 409 GAME_NOT_STARTED, "
+                    + "WRONG_PHASE, GAME_FINISHED.")
+    @PostMapping("/{code}/ready")
+    public ResponseEntity<PlayerReadyResponse> markReady(
+            @PathVariable String code,
+            @Valid @RequestBody PlayerAuthRequest request) {
+        return ResponseEntity.ok(actionService.markReady(code, request));
+    }
+
+    @Operation(summary = "Pokreni noć (domaćin)",
+            description = "Samo domaćin, samo u uvodu prve noći: prvi potez počinje odmah, i kad nisu svi spremni. "
+                    + "Greške: 403 NOT_HOST, 409 WRONG_PHASE, GAME_FINISHED, GAME_NOT_STARTED.")
+    @PostMapping("/{code}/begin-night")
+    public ResponseEntity<Void> beginNight(
+            @PathVariable String code,
+            @Valid @RequestBody HostActionRequest request) {
+        actionService.beginNightAsHost(code, request);
+        return ResponseEntity.ok().build();
+    }
+
+    @Operation(summary = "Igraj ponovno (domaćin)",
+            description = "Samo domaćin, samo kad je soba FINISHED. Soba se vraća u WAITING: brišu se akcije, glasovi i "
+                    + "stanje igre; igrači koji su ostali su opet živi i bez uloge, a oni koji su izašli se brišu. "
+                    + "Sastav uloga i postavke ostaju. Događaj REMATCH; zatim START radi normalno (ako je igrača manje "
+                    + "od maxPlayers, čeka se da uđu novi). Greške: 403 NOT_HOST, 409 WRONG_PHASE.")
+    @PostMapping("/{code}/rematch")
+    public ResponseEntity<Void> rematch(
+            @PathVariable String code,
+            @Valid @RequestBody HostActionRequest request) {
+        lobbyService.rematch(code, request);
         return ResponseEntity.ok().build();
     }
 

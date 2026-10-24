@@ -15,7 +15,9 @@ import com.niko.ai_mafija_backend.exception.ResourceNotFoundException;
 import com.niko.ai_mafija_backend.model.Lobby;
 import com.niko.ai_mafija_backend.model.LobbyRole;
 import com.niko.ai_mafija_backend.model.Role;
+import com.niko.ai_mafija_backend.repository.GameActionRepository;
 import com.niko.ai_mafija_backend.repository.LobbyRepository;
+import com.niko.ai_mafija_backend.repository.VoteRepository;
 import com.niko.ai_mafija_backend.repository.LobbyRoleRepository;
 import com.niko.ai_mafija_backend.repository.PlayerRepository;
 import com.niko.ai_mafija_backend.repository.RoleRepository;
@@ -45,6 +47,8 @@ public class LobbyService {
     private final LobbyRoleRepository lobbyRoleRepository;
     private final PlayerRepository playerRepository;
     private final GameStateRepository gameStateRepository;
+    private final GameActionRepository gameActionRepository;
+    private final VoteRepository voteRepository;
     private final WebSocketService webSocketService;
     private final PlayerAuthService playerAuthService;
     private final ActionService actionService;
@@ -196,6 +200,7 @@ public class LobbyService {
         for (int i = 0; i < players.size(); i++) {
             Player player = players.get(i);
             player.setRole(rolesToAssign.get(i));
+            player.setIsReady(false);
             playerRepository.save(player);
         }
 
@@ -215,6 +220,49 @@ public class LobbyService {
         gameState.setLobby(lobby);
         // prva noć počinje uvodnom pauzom dok igrači gledaju svoje uloge
         actionService.startNight(lobby, gameState, 1);
+    }
+
+    /**
+     * "Igraj ponovno": domaćin vraća završenu igru u čekaonicu iste sobe. Brišu se akcije, glasovi i stanje igre
+     * (pa timer stariju igru više ne može dirati); igrači koji su ostali dobivaju čisto stanje, a oni koji su izašli
+     * se brišu. Sastav uloga i postavke sobe ostaju; nova igra kreće običnim START-om kad je soba puna.
+     */
+    @Transactional
+    public void rematch(String code, HostActionRequest request) {
+        Lobby lobby = lobbyRepository.findByCode(code)
+                .orElseThrow(() -> new ResourceNotFoundException(ErrorCode.LOBBY_NOT_FOUND, "Lobby ne postoji."));
+        playerAuthService.authenticateHostForLobby(request.playerId(), request.playerToken(), lobby);
+
+        // zaključavanje: dva istodobna poziva (ili timer) se ne preklapaju; drugi više ne nađe stanje igre
+        GameState gameState = gameStateRepository.findByLobbyForUpdate(lobby).orElse(null);
+        if (gameState == null || !GameRules.LOBBY_FINISHED.equals(lobby.getStatus())) {
+            throw new ConflictException(ErrorCode.WRONG_PHASE, "Nova igra se može pokrenuti samo kad je igra završena.");
+        }
+
+        voteRepository.deleteByLobby(lobby);
+        gameActionRepository.deleteByLobby(lobby);
+        gameStateRepository.delete(gameState);
+
+        for (Player player : playerRepository.findByLobby(lobby)) {
+            if (player.getPlayerToken() == null || GameRules.ELIMINATED_LEFT.equals(player.getEliminatedHow())) {
+                playerRepository.delete(player);
+                continue;
+            }
+            player.setIsAlive(true);
+            player.setRole(null);
+            player.setIsReady(false);
+            player.setEliminatedHow(null);
+            player.setEliminatedRound(null);
+            playerRepository.save(player);
+        }
+
+        lobby.setStatus(GameRules.LOBBY_WAITING);
+        lobby.setStartedAt(null);
+        lobby.setEndedAt(null);
+        lobbyRepository.save(lobby);
+
+        webSocketService.publishLobbyEventAfterCommit(lobby.getCode(), "REMATCH", "Nova igra u istoj sobi.", null);
+        webSocketService.publishGameStateChangedAfterCommit(lobby.getCode());
     }
 
     private void validateStartedLobbyRoleConfiguration(List<LobbyRole> lobbyRoles) {

@@ -31,4 +31,7 @@ public interface VoteRepository extends JpaRepository<Vote, Long> {
             Integer roundNumber,
             String phase
     );
+
+    /** Svi glasovi sobe – za novu igru u istoj sobi */
+    void deleteByLobby(Lobby lobby);
 }

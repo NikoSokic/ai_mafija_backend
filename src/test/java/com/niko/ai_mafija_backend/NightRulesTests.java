@@ -34,7 +34,8 @@ class NightRulesTests extends GameTestSupport {
         actionService.startNight(lobby, state, 1);
         state = reload(lobby);
         assertNull(state.getCurrentTurnRole());
-        assertBetween(state.getPhaseEndsAt(), 25, 31);
+        // sigurnosni rok uvoda: 90 s (ranije završava kad su svi spremni ili domaćin preskoči)
+        assertBetween(state.getPhaseEndsAt(), 85, 91);
 
         expire(lobby);
         state = reload(lobby);
