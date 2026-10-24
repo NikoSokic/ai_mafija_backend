@@ -45,4 +45,8 @@ public class GameState {
     /** Tko je stradao u zadnjoj noći (id-evi odvojeni zarezom), za jutarnji izvještaj. */
     @Column(name = "night_killed_player_ids")
     private String nightKilledPlayerIds;
+
+    /** Tko je utišan u zadnjoj noći (id-evi odvojeni zarezom); zajedno s nightKilledPlayerIds čini lastNight. */
+    @Column(name = "night_silenced_player_ids")
+    private String nightSilencedPlayerIds;
 }

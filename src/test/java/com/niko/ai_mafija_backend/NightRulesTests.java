@@ -186,19 +186,57 @@ class NightRulesTests extends GameTestSupport {
     }
 
     @Test
-    void damaCannotSilenceMafiaTarget() {
+    void damaCanSilenceAnyAlivePlayer() {
         Lobby lobby = lobby();
         Player mafia = player(lobby, "Mafia", true);
         Player dama = player(lobby, "Dama", true);
         Player target = player(lobby, "Građanin", true);
-        player(lobby, "Građanin", true);
-        player(lobby, "Građanin", true);
+        Player other = player(lobby, "Građanin", true);
+        Player third = player(lobby, "Građanin", true);
+        Player fourth = player(lobby, "Građanin", true);
         nightTurn(lobby, "MAFIA");
 
         act(mafia, "KILL", target);
         expire(lobby);
         assertEquals("DAMA", reload(lobby).getCurrentTurnRole());
-        assertCode(ErrorCode.INVALID_TARGET, () -> act(dama, "SILENCE", target));
+
+        // svi živi: i ona sama, i Mafija, i meta mafije
+        List<Long> allowed = gameStateService.getCurrentPlayerState(dama, reload(lobby))
+                .availableActions().getFirst().targetPlayerIds();
+        assertEquals(List.of(mafia, dama, target, other, third, fourth).stream().map(Player::getId).sorted().toList(), allowed);
+
+        // meta mafije se smije utišati; kako stradava, ne ostaje utišana
+        act(dama, "SILENCE", target);
+        expire(lobby);
+        PublicGameStateResponse publicState = gameStateService.getPublicGameState(lobby.getCode());
+        assertEquals(List.of(target.getId()), publicState.nightKilledPlayerIds());
+        assertEquals(List.of(), publicState.silencedPlayerIds());
+        assertEquals(List.of(), publicState.lastNight().silencedPlayerIds());
+    }
+
+    @Test
+    void damaCanSilenceHerselfOrMafia() {
+        for (boolean self : new boolean[]{true, false}) {
+            Lobby lobby = lobby();
+            Player mafia = player(lobby, "Mafia", true);
+            Player dama = player(lobby, "Dama", true);
+            player(lobby, "Građanin", true);
+            player(lobby, "Građanin", true);
+            player(lobby, "Građanin", true);
+            nightTurn(lobby, "MAFIA");
+
+            expire(lobby);
+            assertEquals("DAMA", reload(lobby).getCurrentTurnRole());
+            Player silenced = self ? dama : mafia;
+            act(dama, "SILENCE", silenced);
+            expire(lobby);
+
+            PublicGameStateResponse publicState = gameStateService.getPublicGameState(lobby.getCode());
+            assertEquals("DAY", publicState.phase());
+            assertEquals(List.of(silenced.getId()), publicState.silencedPlayerIds());
+            assertEquals(List.of(silenced.getId()), publicState.lastNight().silencedPlayerIds());
+            assertEquals(List.of(), publicState.lastNight().killedPlayerIds());
+        }
     }
 
     @Test

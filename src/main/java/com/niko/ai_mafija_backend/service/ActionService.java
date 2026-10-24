@@ -96,9 +96,9 @@ public class ActionService {
         }
 
         List<Long> allowedTargets = rules.allowedTargets(player, gameState, actionType);
-        validateTarget(player, target, actionType, allowedTargets, gameState);
+        validateTarget(player, target, actionType, allowedTargets);
         if (secondTarget != null) {
-            validateTarget(player, secondTarget, actionType, allowedTargets, gameState);
+            validateTarget(player, secondTarget, actionType, allowedTargets);
         }
 
         // Mafijaši smiju promijeniti metu do isteka poteza; ostale uloge igraju jednom
@@ -169,6 +169,7 @@ public class ActionService {
         gameState.setCurrentTurnRole(null);
         gameState.setTieBreakPlayerIds(null);
         gameState.setNightKilledPlayerIds(null);
+        gameState.setNightSilencedPlayerIds(null);
         gameState.setPhaseEndsAt(now.plus(roundNumber == 1 ? FIRST_NIGHT_INTRO : NIGHT_INTRO));
         gameState.setUpdateAt(now);
         gameStateRepository.save(gameState);
@@ -240,6 +241,7 @@ public class ActionService {
                 .toList();
 
         gameState.setNightKilledPlayerIds(GameRulesService.joinIds(killedIds));
+        gameState.setNightSilencedPlayerIds(GameRulesService.joinIds(silencedIds));
         gameState.setCurrentTurnRole(null);
         gameState.setPhaseEndsAt(null);
 
@@ -290,8 +292,7 @@ public class ActionService {
         return target;
     }
 
-    private void validateTarget(Player actor, Player target, String actionType, List<Long> allowedTargets,
-                                GameState gameState) {
+    private void validateTarget(Player actor, Player target, String actionType, List<Long> allowedTargets) {
         if (!isAlive(target)) {
             throw new ConflictException(ErrorCode.INVALID_TARGET, "Ne možeš ciljati mrtvog igrača.");
         }
@@ -303,9 +304,6 @@ public class ActionService {
             message = "Ne možeš odabrati sebe.";
         } else if (KILL.equals(actionType) && isMafiaTeam(target)) {
             message = "Ne možeš ciljati člana svog tima.";
-        } else if (SILENCE.equals(actionType)
-                && target.getId().equals(rules.mafiaKillTarget(actor.getLobby(), gameState.getRoundNumber()))) {
-            message = "Dama ne može utišati igrača kojeg je Mafia odabrala za KILL.";
         } else {
             message = "Taj igrač nije dopuštena meta.";
         }

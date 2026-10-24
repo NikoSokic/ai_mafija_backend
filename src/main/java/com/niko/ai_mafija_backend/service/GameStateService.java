@@ -3,6 +3,7 @@ package com.niko.ai_mafija_backend.service;
 import com.niko.ai_mafija_backend.dto.Response.AvailableActionResponse;
 import com.niko.ai_mafija_backend.dto.Response.CurrentPlayerGameStateResponse;
 import com.niko.ai_mafija_backend.dto.Response.GameStateResponse;
+import com.niko.ai_mafija_backend.dto.Response.LastNightResponse;
 import com.niko.ai_mafija_backend.dto.Response.LobbyPlayerResponse;
 import com.niko.ai_mafija_backend.dto.Response.PublicGameStateResponse;
 import com.niko.ai_mafija_backend.dto.Response.PublicVotingResponse;
@@ -66,7 +67,8 @@ public class GameStateService {
                 OffsetDateTime.now(),
                 gameState != null ? rules.silencedPlayerIds(lobby, gameState) : List.of(),
                 nightKilledPlayerIds(gameState),
-                publicTurn(gameState)
+                publicTurn(gameState),
+                lastNight(gameState)
         );
     }
 
@@ -92,7 +94,8 @@ public class GameStateService {
                 gameState != null ? rules.silencedPlayerIds(lobby, gameState) : List.of(),
                 nightKilledPlayerIds(gameState),
                 votingOpen ? getPublicVoting(lobby, gameState) : null,
-                publicTurn(gameState)
+                publicTurn(gameState),
+                lastNight(gameState)
         );
     }
 
@@ -143,7 +146,9 @@ public class GameStateService {
                 availableActions,
                 canAct ? gameState.getPhaseEndsAt() : null,
                 teammates,
-                teamTargets
+                teamTargets,
+                player.getEliminatedHow(),
+                player.getEliminatedRound()
         );
     }
 
@@ -191,6 +196,17 @@ public class GameStateService {
             return null;
         }
         return gameState.getCurrentTurnRole();
+    }
+
+    /** Rezultat zadnje noći je javan cijeli dan (rasprava, glasanje, ponovno glasanje); noću i na kraju igre ga nema */
+    private LastNightResponse lastNight(GameState gameState) {
+        if (gameState == null || !isDaytime(gameState.getPhase())) {
+            return null;
+        }
+        return new LastNightResponse(
+                gameState.getRoundNumber(),
+                GameRulesService.parseIds(gameState.getNightKilledPlayerIds()),
+                GameRulesService.parseIds(gameState.getNightSilencedPlayerIds()));
     }
 
     private List<Long> nightKilledPlayerIds(GameState gameState) {

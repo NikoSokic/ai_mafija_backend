@@ -4,6 +4,7 @@ import com.niko.ai_mafija_backend.dto.Requests.HostActionRequest;
 import com.niko.ai_mafija_backend.dto.Requests.VoteRequest;
 import com.niko.ai_mafija_backend.dto.Response.ResolveVoteResponse;
 import com.niko.ai_mafija_backend.dto.Response.VoteCountResponse;
+import com.niko.ai_mafija_backend.dto.Response.VoteCastResponse;
 import com.niko.ai_mafija_backend.dto.Response.VoteResponse;
 import com.niko.ai_mafija_backend.exception.BadRequestException;
 import com.niko.ai_mafija_backend.exception.ConflictException;
@@ -116,6 +117,8 @@ public class VoteService {
                 .createdAt(OffsetDateTime.now())
                 .build());
 
+        publishVoteCast(lobby, gameState);
+
         ResolveVoteResponse resolveResult = resolveIfAllVoted(lobby, gameState);
         if (resolveResult == null) {
             // glasovi su javni: svi odmah vide novi glas
@@ -132,6 +135,18 @@ public class VoteService {
                 resolveResult != null,
                 resolveResult
         );
+    }
+
+    /** Događaj nosi samo brojeve (predano / očekivano); tko je za koga glasao u njemu nema */
+    private void publishVoteCast(Lobby lobby, GameState gameState) {
+        Set<Long> voterIds = rules.eligibleVoters(lobby, gameState).stream()
+                .map(Player::getId)
+                .collect(Collectors.toSet());
+        long votedCount = rules.currentVotes(lobby, gameState).stream()
+                .filter(vote -> voterIds.contains(vote.getVoterPlayer().getId()))
+                .count();
+        webSocketService.publishLobbyEventAfterCommit(lobby.getCode(), "VOTE_CAST", "Glas je predan.",
+                new VoteCastResponse((int) votedCount, voterIds.size()));
     }
 
     /** Domaćin pokreće glasanje prije kraja rasprave – svima istovremeno */

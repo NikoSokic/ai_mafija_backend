@@ -9,6 +9,7 @@ import java.util.List;
  * @param voting          null dok glasanje nije otvoreno
  * @param currentTurnRole koja je uloga noću budna (MAFIA, DAMA, Doktor…); null u uvodu noći i danju.
  *                        Ne otkriva tko je živ: potez dobije svaka uloga iz sastava, mrtva glumljeni.
+ * @param lastNight       rezultat zadnje noći tijekom dana (DAY, VOTING, TIE_BREAK); inače null
  */
 public record PublicGameStateResponse(
         String lobbyCode,
@@ -25,6 +26,7 @@ public record PublicGameStateResponse(
         List<Long> silencedPlayerIds,
         List<Long> nightKilledPlayerIds,
         PublicVotingResponse voting,
-        String currentTurnRole
+        String currentTurnRole,
+        LastNightResponse lastNight
 ) {
 }

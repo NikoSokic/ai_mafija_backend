@@ -184,16 +184,12 @@ public class GameRulesService {
         return uniqueLeader(counts);
     }
 
-    /** Koga igrač smije odabrati za akciju. Sebe samo Doktor; mafija ne cilja svoj tim; Dama ne utišava metu mafije. */
+    /** Koga igrač smije odabrati za akciju. Sebe smiju Doktor i Dama (utišavanje); mafija ne cilja svoj tim. */
     public List<Long> allowedTargets(Player actor, GameState gameState, String actionType) {
-        List<Player> alive = alivePlayers(actor.getLobby());
-        Long mafiaTarget = SILENCE.equals(actionType)
-                ? mafiaKillTarget(actor.getLobby(), gameState.getRoundNumber())
-                : null;
-        return alive.stream()
-                .filter(target -> SAVE.equals(actionType) || !target.getId().equals(actor.getId()))
+        boolean selfAllowed = SAVE.equals(actionType) || SILENCE.equals(actionType);
+        return alivePlayers(actor.getLobby()).stream()
+                .filter(target -> selfAllowed || !target.getId().equals(actor.getId()))
                 .filter(target -> !KILL.equals(actionType) || !isMafiaTeam(target))
-                .filter(target -> mafiaTarget == null || !target.getId().equals(mafiaTarget))
                 .map(Player::getId)
                 .sorted()
                 .toList();

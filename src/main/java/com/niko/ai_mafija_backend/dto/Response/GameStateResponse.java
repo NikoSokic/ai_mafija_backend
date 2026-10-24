@@ -9,6 +9,7 @@ import java.util.List;
  * @param silencedPlayerIds    utišani u tekućem danu
  * @param nightKilledPlayerIds tko je stradao u noći prije tekućeg dana
  * @param currentTurnRole      koja je uloga noću budna (MAFIA, DAMA, Doktor…); null u uvodu noći i danju
+ * @param lastNight            rezultat zadnje noći tijekom dana (DAY, VOTING, TIE_BREAK); inače null
  */
 public record GameStateResponse(
         String lobbyCode,
@@ -24,6 +25,7 @@ public record GameStateResponse(
         OffsetDateTime serverTime,
         List<Long> silencedPlayerIds,
         List<Long> nightKilledPlayerIds,
-        String currentTurnRole
+        String currentTurnRole,
+        LastNightResponse lastNight
 ) {
 }
