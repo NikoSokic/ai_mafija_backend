@@ -5,6 +5,8 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.config.annotation.CorsRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
+import java.util.Arrays;
+
 @Configuration
 public class CorsConfig implements WebMvcConfigurer {
 
@@ -12,7 +14,8 @@ public class CorsConfig implements WebMvcConfigurer {
 
     public CorsConfig(
             @Value("${app.cors.allowed-origins:http://localhost:5173}") String[] allowedOrigins) {
-        this.allowedOrigins = allowedOrigins;
+        // APP_CORS_ALLOWED_ORIGINS: više domena odvojenih zarezom, razmaci se ignoriraju
+        this.allowedOrigins = Arrays.stream(allowedOrigins).map(String::trim).toArray(String[]::new);
     }
 
     @Override

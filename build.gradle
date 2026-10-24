@@ -39,6 +39,11 @@ dependencies {
 
 }
 
+// samo izvršni jar (bez *-plain.jar), da ga Dockerfile lako nađe
+tasks.named('jar') {
+    enabled = false
+}
+
 tasks.named('test') {
     useJUnitPlatform()
     // svi testovi rade na H2 (application-test.properties), nikad na Supabaseu
