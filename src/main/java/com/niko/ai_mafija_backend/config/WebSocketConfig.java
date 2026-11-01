@@ -1,7 +1,9 @@
 package com.niko.ai_mafija_backend.config;
 
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.TaskScheduler;
 import org.springframework.messaging.Message;
 import org.springframework.messaging.MessageChannel;
 import org.springframework.messaging.MessagingException;
@@ -25,17 +27,25 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
     /** Jedina dopuštena pretplata: kod sobe je 6 znakova (LobbyService.LOBBY_CODE_CHARACTERS) */
     private static final Pattern LOBBY_TOPIC = Pattern.compile("/topic/lobby/[A-Z0-9]{6}");
 
+    /** Server i klijent javljaju "živ sam" svakih 10 s, pa se tiho prekinuta veza (ugašen mobitel) otkrije */
+    private static final long HEARTBEAT_MS = 10_000;
+
     private final String[] allowedOrigins;
+    private final TaskScheduler heartbeatScheduler;
 
     public WebSocketConfig(
-            @Value("${app.cors.allowed-origins:http://localhost:5173}") String[] allowedOrigins) {
+            @Value("${app.cors.allowed-origins:http://localhost:5173}") String[] allowedOrigins,
+            @Lazy TaskScheduler messageBrokerTaskScheduler) {
         // APP_CORS_ALLOWED_ORIGINS: više domena odvojenih zarezom, razmaci se ignoriraju
         this.allowedOrigins = Arrays.stream(allowedOrigins).map(String::trim).toArray(String[]::new);
+        this.heartbeatScheduler = messageBrokerTaskScheduler;
     }
 
     @Override
     public void configureMessageBroker(MessageBrokerRegistry config) {
-        config.enableSimpleBroker("/topic");
+        config.enableSimpleBroker("/topic")
+                .setHeartbeatValue(new long[]{HEARTBEAT_MS, HEARTBEAT_MS})
+                .setTaskScheduler(heartbeatScheduler);
         config.setApplicationDestinationPrefixes("/app");
     }
 

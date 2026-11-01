@@ -129,7 +129,11 @@ public class ActionService {
 
         // potez traje do isteka roka i kad su svi odigrali, pa se noć ovdje nikad ne obrađuje
         ResolveNightResponse resolveResult = null;
-        webSocketService.publishGameStateChangedAfterCommit(lobby.getCode());
+        // Događaj svima usred poteza otkrio bi da je uloga živa (glumljeni potez ga ne šalje), pa se šalje
+        // samo za KILL: suigrači mafije uživo vide tko je koga odabrao. Ostali potezi ne mijenjaju javno stanje.
+        if (KILL.equals(actionType)) {
+            webSocketService.publishGameStateChangedAfterCommit(lobby.getCode());
+        }
 
         return new ActionResponse(
                 savedAction.getId(),
