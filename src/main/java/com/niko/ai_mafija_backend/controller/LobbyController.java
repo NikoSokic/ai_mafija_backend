@@ -23,7 +23,12 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import com.niko.ai_mafija_backend.dto.Requests.ReclaimDecisionRequest;
+import com.niko.ai_mafija_backend.dto.Requests.ReclaimLobbyRequest;
+import com.niko.ai_mafija_backend.dto.Response.ReclaimCreatedResponse;
+import com.niko.ai_mafija_backend.dto.Response.ReclaimStatusResponse;
 import com.niko.ai_mafija_backend.service.PlayerService;
+import com.niko.ai_mafija_backend.service.ReclaimService;
 import com.niko.ai_mafija_backend.service.GameStateService;
 import com.niko.ai_mafija_backend.service.VoteService;
 
@@ -40,6 +45,7 @@ public class LobbyController {
     private final GameStateService gameStateService;
     private final VoteService voteService;
     private final ActionService actionService;
+    private final ReclaimService reclaimService;
 
     @Operation(summary = "Stvori sobu",
             description = "Domaćin dobiva playerId i playerToken. Postavke mode (LIVE|ONLINE, zadano LIVE), "
@@ -144,9 +150,11 @@ public class LobbyController {
     }
 
     @Operation(summary = "Napusti sobu",
-            description = "Samo dok soba čeka igrače (WAITING): igrač se briše, nadimak se oslobađa, događaj PLAYER_LEFT. "
+            description = "Dok soba čeka igrače (WAITING): igrač se briše, nadimak se oslobađa, događaj PLAYER_LEFT. "
+                    + "Tijekom igre (IN_PROGRESS) igrač ispada (eliminatedHow LEFT), uloga mu ostaje tajna, a glasanje i "
+                    + "uvod prve noći ne čekaju na njega; ako preostali igrači odlučuju pobjednika, igra završava. "
                     + "Ako izlazi domaćin, domaćin postaje igrač koji je najduže u sobi (događaj HOST_CHANGED {hostPlayerId}); "
-                    + "ako nema nikoga, soba se briše. Tijekom igre vraća 409 GAME_IN_PROGRESS. "
+                    + "ako nema nikoga, soba se briše. "
                     + "Greške: 401 INVALID_TOKEN, 403 NOT_IN_LOBBY, 404 LOBBY_NOT_FOUND.")
     @PostMapping("/{code}/leave")
     public ResponseEntity<Void> leaveLobby(
@@ -154,6 +162,45 @@ public class LobbyController {
             @Valid @RequestBody PlayerAuthRequest request) {
         playerService.leaveLobby(code, request);
         return ResponseEntity.ok().build();
+    }
+
+    @Operation(summary = "Povratak na novom uređaju: zahtjev",
+            description = "Igrač čiji je token izgubljen upisuje kod sobe i svoj nadimak. Domaćin dobiva događaj "
+                    + "RECLAIM_REQUESTED {requestId, playerId, nickname, avatarEmoji, expiresAt} (i u odgovoru na heartbeat, "
+                    + "polje reclaimRequests). Zahtjev vrijedi 2 min; novi zahtjev za istog igrača zamjenjuje prethodni. "
+                    + "Odgovor: requestId i claimSecret, kojim novi uređaj dohvaća ishod. "
+                    + "Greške: 404 LOBBY_NOT_FOUND, 404 PLAYER_NOT_FOUND, 409 RECLAIM_NOT_ALLOWED (igrač je otišao iz sobe).")
+    @PostMapping("/{code}/reclaim")
+    public ResponseEntity<ReclaimCreatedResponse> requestReclaim(
+            @PathVariable String code,
+            @Valid @RequestBody ReclaimLobbyRequest request) {
+        return ResponseEntity.ok(reclaimService.request(code, request));
+    }
+
+    @Operation(summary = "Povratak na novom uređaju: odluka domaćina",
+            description = "Samo domaćin. approve=true ili false; događaj RECLAIM_RESOLVED {requestId, status} makne "
+                    + "pitanje s ostalih uređaja domaćina. Greške: 403 NOT_HOST, 404 RECLAIM_NOT_FOUND (nema ga, obrađen "
+                    + "je ili je istekao).")
+    @PostMapping("/{code}/reclaim/{requestId}/decision")
+    public ResponseEntity<Void> decideReclaim(
+            @PathVariable String code,
+            @PathVariable Long requestId,
+            @Valid @RequestBody ReclaimDecisionRequest request) {
+        reclaimService.decide(code, requestId, request);
+        return ResponseEntity.ok().build();
+    }
+
+    @Operation(summary = "Povratak na novom uređaju: ishod",
+            description = "Novi uređaj pita s tajnom iz zahtjeva. status: PENDING (čeka domaćina), DENIED, EXPIRED, "
+                    + "CLAIMED (token je već preuzet) ili APPROVED. Samo uz APPROVED, i samo jednom, stižu playerId, "
+                    + "nickname, alive, lobbyId, lobbyCode i novi playerToken; stari token tada prestaje vrijediti. "
+                    + "Greška: 404 RECLAIM_NOT_FOUND (krivi zahtjev ili tajna).")
+    @GetMapping("/{code}/reclaim/{requestId}")
+    public ResponseEntity<ReclaimStatusResponse> reclaimStatus(
+            @PathVariable String code,
+            @PathVariable Long requestId,
+            @RequestParam String secret) {
+        return ResponseEntity.ok(reclaimService.status(code, requestId, secret));
     }
 
     @Operation(summary = "Izbaci igrača (domaćin)",

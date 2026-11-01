@@ -903,18 +903,18 @@ class FullGameApiTests extends GameTestSupport {
     }
 
     @Test
-    void leavingDuringGameReturnsGameInProgress() throws Exception {
-        createAndStart(Map.of("Mafia", 1, "Građanin", 3));
+    void leavingDuringGameEliminatesPlayer() throws Exception {
+        createAndStart(Map.of("Mafia", 1, "Građanin", 4));
         Seat citizen = byRole.get("Građanin").getFirst();
+        Seat other = byRole.get("Građanin").get(1);
 
-        expectError(post(lobbyPath() + "/leave", auth(citizen)), HttpStatus.CONFLICT, GAME_IN_PROGRESS);
-        expectError(post(lobbyPath() + "/leave", auth(host)), HttpStatus.CONFLICT, GAME_IN_PROGRESS);
+        ok(post(lobbyPath() + "/leave", auth(citizen)));
 
-        // igrač je i dalje u igri, s važećim tokenom
-        String state = gameState(citizen);
-        assertTrue(bool(state, "$.currentPlayer.alive"));
-        assertEquals(4, ((List<?>) read(state, "$.players")).size());
-        assertEquals(List.of(), events("PLAYER_LEFT"));
+        // token više ne vrijedi, a ostali igrači vide da je ispao
+        expectError(post(lobbyPath() + "/leave", auth(citizen)), HttpStatus.UNAUTHORIZED, INVALID_TOKEN);
+        String state = gameState(other);
+        assertEquals(5, ((List<?>) read(state, "$.players")).size());
+        assertEquals(1, events("PLAYER_LEFT").size());
     }
 
     @Test
@@ -923,7 +923,7 @@ class FullGameApiTests extends GameTestSupport {
         assertTrue(docs.contains("\"/api/lobbies\""));
         assertTrue(docs.contains("\"/api/lobbies/{code}/leave\""));
         assertTrue(docs.contains("Popis javnih soba"));
-        assertTrue(docs.contains("GAME_IN_PROGRESS"));
+        assertTrue(docs.contains("eliminatedHow LEFT"));
         assertTrue(docs.contains("hostAvatarEmoji"));
         assertTrue(docs.contains("voiceEnabled"));
         assertTrue(docs.contains("hostPlayerId"));

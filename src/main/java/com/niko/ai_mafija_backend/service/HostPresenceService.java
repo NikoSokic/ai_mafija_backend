@@ -2,6 +2,7 @@ package com.niko.ai_mafija_backend.service;
 
 import com.niko.ai_mafija_backend.dto.Requests.PlayerAuthRequest;
 import com.niko.ai_mafija_backend.dto.Response.HeartbeatResponse;
+import com.niko.ai_mafija_backend.dto.Response.ReclaimPendingResponse;
 import com.niko.ai_mafija_backend.model.Lobby;
 import com.niko.ai_mafija_backend.model.Player;
 import com.niko.ai_mafija_backend.repository.LobbyRepository;
@@ -33,6 +34,7 @@ public class HostPresenceService {
 
     private final PlayerAuthService playerAuthService;
     private final PlayerService playerService;
+    private final ReclaimService reclaimService;
     private final PlayerRepository playerRepository;
     private final LobbyRepository lobbyRepository;
     private final PlatformTransactionManager transactionManager;
@@ -54,7 +56,9 @@ public class HostPresenceService {
         Long hostId = lobby.getHostPlayer() != null ? lobby.getHostPlayer().getId() : null;
         // sebe nikad ne označava: upravo se javio
         List<Long> away = awayPlayerIds(lobby, now).stream().filter(id -> !id.equals(player.getId())).toList();
-        return new HeartbeatResponse(hostId, away);
+        // zahtjeve za povratak na novom uređaju vidi samo domaćin
+        List<ReclaimPendingResponse> reclaims = player.getId().equals(hostId) ? reclaimService.pendingFor(lobby) : List.of();
+        return new HeartbeatResponse(hostId, away, reclaims);
     }
 
     /** Igrači s tokenom koji se ne javljaju AWAY_AFTER ("Nije tu") */

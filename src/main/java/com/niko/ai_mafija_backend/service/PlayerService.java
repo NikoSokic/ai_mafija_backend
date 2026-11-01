@@ -48,6 +48,9 @@ public class PlayerService {
     private final GameStateRepository gameStateRepository;
     private final WebSocketService webSocketService;
     private final GameStateService gameStateService;
+    private final GameOutcomeService gameOutcomeService;
+    private final VoteService voteService;
+    private final ActionService actionService;
 
     @Transactional
     public JoinLobbyResponse joinLobby(String code, JoinLobbyRequest request) {
@@ -182,13 +185,37 @@ public class PlayerService {
         if (LOBBY_WAITING.equals(lobby.getStatus())) {
             leaveWaitingLobby(lobby, player);
         } else if (LOBBY_IN_PROGRESS.equals(lobby.getStatus())) {
-            // tijekom igre se ne izlazi (ispadanje bi otkrilo ulogu i pomaknulo igru); klijent samo lokalno izlazi
-            throw new ConflictException(ErrorCode.GAME_IN_PROGRESS, "Igra je u tijeku, sobu nije moguće napustiti.");
+            leaveRunningGame(lobby, player);
         } else {
             Player newHost = handOverHostIfNeeded(lobby, player);
             player.setPlayerToken(null);
             playerRepository.save(player);
             publishPlayerLeft(lobby, player, newHost);
+        }
+    }
+
+    /**
+     * Izlazak usred igre: igrač ispada (LEFT), a uloga ostaje tajna. Zatim se provjerava pobjednik; ako igra
+     * traje dalje, glasanje i uvod prve noći ne čekaju više na njega.
+     */
+    private void leaveRunningGame(Lobby lobby, Player player) {
+        GameState gameState = gameStateRepository.findByLobbyForUpdate(lobby).orElse(null);
+        Player newHost = handOverHostIfNeeded(lobby, player);
+
+        // mrtav igrač koji odlazi ostaje zapisan kako je ispao (NIGHT ili VOTE)
+        if (isAlive(player)) {
+            gameOutcomeService.eliminate(player, ELIMINATED_LEFT,
+                    gameState != null ? gameState.getRoundNumber() : null);
+        }
+        player.setPlayerToken(null);
+        playerRepository.save(player);
+        publishPlayerLeft(lobby, player, newHost);
+
+        if (gameState != null && !FINISHED.equals(gameState.getPhase())
+                && gameOutcomeService.finishGameIfWinnerExists(lobby, gameState) == null) {
+            voteService.resolveIfAllVoted(lobby, gameState);
+            actionService.advanceIntroIfAllReady(lobby, gameState);
+            webSocketService.publishGameStateChangedAfterCommit(lobby.getCode());
         }
     }
 

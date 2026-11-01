@@ -212,6 +212,17 @@ public class ActionService {
         advanceTurn(lobby, gameState);
     }
 
+    /** Igrač je ispao usred uvoda prve noći: ako su svi preostali živi spremni, prvi potez počinje odmah. */
+    public void advanceIntroIfAllReady(Lobby lobby, GameState gameState) {
+        if (!isFirstNightIntro(gameState)) {
+            return;
+        }
+        List<Player> alive = playerRepository.findByLobbyAndIsAliveTrue(lobby);
+        if (!alive.isEmpty() && alive.stream().allMatch(other -> Boolean.TRUE.equals(other.getIsReady()))) {
+            advanceTurn(lobby, gameState);
+        }
+    }
+
     private void assertFirstNightIntro(GameState gameState, String message) {
         if (FINISHED.equals(gameState.getPhase())) {
             throw new ConflictException(ErrorCode.GAME_FINISHED, "Igra je završena.");

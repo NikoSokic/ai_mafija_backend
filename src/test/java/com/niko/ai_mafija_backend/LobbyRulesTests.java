@@ -50,7 +50,7 @@ class LobbyRulesTests extends GameTestSupport {
     }
 
     @Test
-    void leavingDuringGameIsRejectedAndKeepsPlayerInGame() {
+    void leavingDuringGameEliminatesPlayerAsLeft() {
         Lobby lobby = lobby();
         host(lobby, "Mafia");
         player(lobby, "Mafia", true);
@@ -60,12 +60,54 @@ class LobbyRulesTests extends GameTestSupport {
         player(lobby, "Građanin", true);
         state(lobby, "DAY", 1);
 
-        assertCode(ErrorCode.GAME_IN_PROGRESS, () -> playerService.leaveLobby(lobby.getCode(), leave(leaver)));
+        playerService.leaveLobby(lobby.getCode(), leave(leaver));
 
-        Player stillThere = reload(leaver);
-        assertTrue(stillThere.getIsAlive());
-        assertEquals(leaver.getPlayerToken(), stillThere.getPlayerToken());
-        assertNull(stillThere.getEliminatedHow());
+        Player gone = reload(leaver);
+        assertFalse(gone.getIsAlive());
+        assertEquals("LEFT", gone.getEliminatedHow());
+        assertEquals(1, gone.getEliminatedRound());
+        assertNull(gone.getPlayerToken());
+        assertEquals("IN_PROGRESS", lobbyRepository.findById(lobby.getId()).orElseThrow().getStatus());
+        assertEquals("DAY", reload(lobby).getPhase());
+    }
+
+    @Test
+    void lastMafiaLeavingDuringGameEndsItForCitizens() {
+        Lobby lobby = lobby();
+        host(lobby, "Građanin");
+        Player mafia = player(lobby, "Mafia", true);
+        player(lobby, "Građanin", true);
+        player(lobby, "Građanin", true);
+        state(lobby, "DAY", 1);
+
+        playerService.leaveLobby(lobby.getCode(), leave(mafia));
+
+        assertEquals("FINISHED", lobbyRepository.findById(lobby.getId()).orElseThrow().getStatus());
+        assertEquals("FINISHED", reload(lobby).getPhase());
+    }
+
+    @Test
+    void leavingDuringVotingDoesNotBlockTheVote() {
+        Lobby lobby = lobby();
+        Player host = host(lobby, "Mafia");
+        Player a = player(lobby, "Građanin", true);
+        Player b = player(lobby, "Građanin", true);
+        Player leaver = player(lobby, "Građanin", true);
+        player(lobby, "Građanin", true);
+        state(lobby, "VOTING", 1);
+        vote(host, null);
+        vote(a, null);
+        vote(b, null);
+        // još glasa zadnji građanin; kad odlazi onaj koji je trebao glasati, glasanje se završava
+        Player lastVoter = playerRepository.findByLobby(lobby).stream()
+                .filter(p -> !List.of(host.getId(), a.getId(), b.getId(), leaver.getId()).contains(p.getId()))
+                .findFirst().orElseThrow();
+        vote(leaver, null);
+        assertEquals("VOTING", reload(lobby).getPhase());
+
+        playerService.leaveLobby(lobby.getCode(), leave(lastVoter));
+
+        assertEquals("NIGHT", reload(lobby).getPhase());
     }
 
     @Test

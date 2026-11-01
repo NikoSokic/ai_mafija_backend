@@ -13,6 +13,7 @@ import com.niko.ai_mafija_backend.repository.GameStateRepository;
 import com.niko.ai_mafija_backend.repository.LobbyRepository;
 import com.niko.ai_mafija_backend.repository.LobbyRoleRepository;
 import com.niko.ai_mafija_backend.repository.PlayerRepository;
+import com.niko.ai_mafija_backend.repository.ReclaimRequestRepository;
 import com.niko.ai_mafija_backend.repository.RoleRepository;
 import com.niko.ai_mafija_backend.repository.VoteRepository;
 import com.niko.ai_mafija_backend.service.ActionService;
@@ -49,8 +50,11 @@ abstract class GameTestSupport {
     @Autowired protected GameActionRepository gameActionRepository;
     @Autowired protected VoteRepository voteRepository;
 
+    @Autowired protected ReclaimRequestRepository reclaimRequestRepository;
+
     @AfterEach
     void cleanDatabase() {
+        reclaimRequestRepository.deleteAll();
         gameActionRepository.deleteAll();
         voteRepository.deleteAll();
         gameStateRepository.deleteAll();

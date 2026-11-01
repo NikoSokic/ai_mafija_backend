@@ -32,6 +32,11 @@ public enum ErrorCode {
     GAME_IN_PROGRESS,
     CANNOT_KICK_SELF,
 
+    // povratak na novom uređaju
+    RECLAIM_NOT_FOUND,
+    /** Igrač koji je otišao iz sobe ne može se vratiti ovim putem */
+    RECLAIM_NOT_ALLOWED,
+
     // tijek igre
     GAME_NOT_STARTED,
     GAME_FINISHED,
