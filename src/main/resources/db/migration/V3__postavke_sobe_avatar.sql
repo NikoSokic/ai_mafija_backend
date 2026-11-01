@@ -1,6 +1,4 @@
 -- Postavke sobe i avatar igrača (listopad 2026.)
--- Backend radi s spring.jpa.hibernate.ddl-auto=none, pa ovo treba pokrenuti ručno
--- u Supabase SQL editoru PRIJE pokretanja nove verzije backenda. Sigurno je pokrenuti više puta.
 
 -- Način igre: LIVE (uživo) ili ONLINE; postojeće sobe ostaju LIVE
 ALTER TABLE lobby ADD COLUMN IF NOT EXISTS mode varchar(16) NOT NULL DEFAULT 'LIVE';

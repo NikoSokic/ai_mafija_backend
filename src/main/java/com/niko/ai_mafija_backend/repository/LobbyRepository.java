@@ -7,6 +7,7 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -23,6 +24,15 @@ public interface LobbyRepository extends JpaRepository<Lobby,Long> {
 
     /** Sobe koje imaju domaćina: provjera je li domaćin još tu */
     List<Lobby> findByHostPlayerIsNotNull();
+
+    /** Sobe u kojima se od zadanog trenutka nije javio nijedan igrač (i prazne sobe) */
+    @Query("""
+            select l.code from Lobby l
+            where not exists (
+                select 1 from Player p
+                where p.lobby = l and coalesce(p.lastSeenAt, p.joinedAt) >= :since)
+            """)
+    List<String> findCodesWithoutActivitySince(@Param("since") OffsetDateTime since);
 
     /** Javne sobe za popis: samo sa zadanim statusom, najnovije prve, najviše 20 */
     List<Lobby> findTop20ByStatusAndIsPublicTrueOrderByCreatedAtDesc(String status);

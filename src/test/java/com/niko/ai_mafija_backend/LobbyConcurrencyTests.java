@@ -58,7 +58,8 @@ class LobbyConcurrencyTests extends GameTestSupport {
                 List<Player> players = playerRepository.findByLobby(lobby);
                 assertTrue(players.size() <= CAPACITY, "Soba prepunjena: " + players.size());
                 assertEquals(CAPACITY, players.size());
-                assertEquals(1, players.stream().filter(p -> p.getNickname().equals("Isti")).count());
+                // 0 je moguće: četiri dretve s različitim nadimcima mogu popuniti sobu prije ostalih
+                assertTrue(players.stream().filter(p -> p.getNickname().equals("Isti")).count() <= 1);
             }
         } finally {
             pool.shutdownNow();

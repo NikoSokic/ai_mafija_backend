@@ -16,4 +16,6 @@ public interface ReclaimRequestRepository extends JpaRepository<ReclaimRequest, 
     List<ReclaimRequest> findByPlayerIdAndStatus(Long playerId, String status);
 
     void deleteByExpiresAtBefore(OffsetDateTime time);
+
+    void deleteByLobbyId(Long lobbyId);
 }

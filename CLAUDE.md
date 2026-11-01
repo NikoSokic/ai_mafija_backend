@@ -13,10 +13,15 @@ u frontend repou, `docs/pravila-igre.md`.
 ## Baza
 
 - `spring.jpa.hibernate.ddl-auto=none`: Hibernate ne dira shemu.
-- Svaka promjena sheme ide kao SQL u `db/migrations/NNN_opis.sql` (sljedeći slobodni broj, npr. `002_avatar.sql`).
-  SQL mora biti idempotentan: `ADD COLUMN IF NOT EXISTS`, `CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`…
+- Svaka promjena sheme ide kao Flyway migracija u `src/main/resources/db/migration/VN__opis.sql` (sljedeći slobodni
+  broj, npr. `V9__avatar.sql`). Backend je sam pokreće pri pokretanju; ručno se ništa ne pokreće u Supabaseu.
+- Pokrenuta migracija se više ne mijenja, jer Flyway provjerava sadržaj datoteke. Ispravak ide u novu migraciju.
+- SQL mora biti idempotentan: `ADD COLUMN IF NOT EXISTS`, `CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`…
+- Nova tablica u istoj migraciji dobiva `ALTER TABLE … ENABLE ROW LEVEL SECURITY`.
+- Migracija ne smije raditi `ALTER` nad `flyway_schema_history`: Flyway tada stane jer u nju piše preko druge veze.
 - U istoj izmjeni ažuriraj i entitete u `model/`.
-- Na kraju odgovora napiši da migraciju treba pokrenuti u **Supabase SQL Editoru** (prije pokretanja nove verzije backenda).
+- Testovi migracije ne pokreću (H2), pa novu migraciju isprobaj na lokalnom PostgreSQL-u.
+- Sigurnosne kopije i vraćanje: `db/vracanje-kopije.md`.
 - Testovi rade na H2 (profil `test`, `src/test/resources/application-test.properties`, `create-drop`) i nikad ne
   diraju Supabase. `build.gradle` uključuje profil za sve testove, a testne klase imaju i `@ActiveProfiles("test")`.
 

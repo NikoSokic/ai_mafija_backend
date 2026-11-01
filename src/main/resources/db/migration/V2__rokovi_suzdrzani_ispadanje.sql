@@ -1,6 +1,4 @@
 -- Pravila dana, glasanja i noći (listopad 2026.)
--- Backend radi s spring.jpa.hibernate.ddl-auto=none, pa ovo treba pokrenuti ručno
--- u Supabase SQL editoru PRIJE pokretanja nove verzije backenda. Sigurno je pokrenuti više puta.
 
 -- Rok trenutne faze ili poteza noći (rasprava 2:30, glasanje 60 s, potez uloge 30 s…)
 ALTER TABLE game_state ADD COLUMN IF NOT EXISTS phase_ends_at timestamptz;

@@ -43,6 +43,8 @@ public final class GameRules {
     public static final Duration HOST_ABSENT_LOBBY = Duration.ofSeconds(120);
     /** Usred igre: bez domaćina nema glasa naratora ni gumba domaćina */
     public static final Duration HOST_ABSENT_IN_GAME = Duration.ofSeconds(45);
+    /** Soba u kojoj se toliko nitko nije javio je napuštena i briše se (LobbyCleanupService) */
+    public static final Duration ABANDONED_AFTER = Duration.ofHours(1);
 
     // ---------- faze ----------
     public static final String NIGHT = "NIGHT";

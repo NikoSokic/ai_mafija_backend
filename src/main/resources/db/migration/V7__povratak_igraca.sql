@@ -1,6 +1,4 @@
 -- Povratak igrača na novom uređaju (studeni 2026.): igrač upiše kod sobe i nadimak, a domaćin odobri zahtjev.
--- Backend radi s spring.jpa.hibernate.ddl-auto=none, pa ovo treba pokrenuti ručno u Supabase SQL editoru
--- PRIJE pokretanja nove verzije backenda. Sigurno je pokrenuti više puta.
 
 -- Zahtjev traje kratko (2 min). lobby_id i player_id nisu strani ključevi namjerno: brisanje igrača ili sobe
 -- ne smije ovisiti o ovoj tablici, a zaostali redovi istječu i brišu se pri sljedećem zahtjevu.
@@ -17,3 +15,6 @@ CREATE TABLE IF NOT EXISTS reclaim_request (
 );
 
 CREATE INDEX IF NOT EXISTS idx_reclaim_request_lobby_status ON reclaim_request (lobby_id, status);
+
+-- Supabase novim tablicama daje puna prava javnoj ulozi anon, a ovdje je tajna novog uređaja
+ALTER TABLE reclaim_request ENABLE ROW LEVEL SECURITY;
