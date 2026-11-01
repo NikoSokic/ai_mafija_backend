@@ -48,7 +48,7 @@ public class PlayerService {
     @Transactional
     public JoinLobbyResponse joinLobby(String code, JoinLobbyRequest request) {
 
-        Lobby lobby = findLobby(code);
+        Lobby lobby = findLobbyForUpdate(code);
         String nickname = request.getNickname().trim();
 
         if (!lobby.getStatus().equals(LOBBY_WAITING)) {
@@ -168,7 +168,7 @@ public class PlayerService {
     @Transactional
     public void leaveLobby(String code, PlayerAuthRequest request) {
 
-        Lobby lobby = findLobby(code);
+        Lobby lobby = findLobbyForUpdate(code);
         Player player = playerAuthService.authenticate(request.playerId(), request.playerToken());
         if (!player.getLobby().getId().equals(lobby.getId())) {
             throw new ForbiddenException(ErrorCode.NOT_IN_LOBBY, "Igrač ne pripada ovom lobbyju.");
@@ -249,6 +249,11 @@ public class PlayerService {
                     new HostChangedResponse(newHost.getId())
             );
         }
+    }
+
+    private Lobby findLobbyForUpdate(String code) {
+        return lobbyRepository.findByCodeForUpdate(code)
+                .orElseThrow(() -> new ResourceNotFoundException(ErrorCode.LOBBY_NOT_FOUND, "Lobby ne postoji."));
     }
 
     private Lobby findLobby(String code) {

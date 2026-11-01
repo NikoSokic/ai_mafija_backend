@@ -164,7 +164,7 @@ public class LobbyService {
     @Transactional
     public void startLobby(String code, HostActionRequest request) {
 
-        Lobby lobby = lobbyRepository.findByCode(code)
+        Lobby lobby = lobbyRepository.findByCodeForUpdate(code)
                 .orElseThrow(() -> new ResourceNotFoundException(ErrorCode.LOBBY_NOT_FOUND, "Lobby ne postoji."));
         playerAuthService.authenticateHostForLobby(request.playerId(), request.playerToken(), lobby);
 

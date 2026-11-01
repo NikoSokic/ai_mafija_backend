@@ -48,5 +48,11 @@ tasks.named('test') {
     useJUnitPlatform()
     // svi testovi rade na H2 (application-test.properties), nikad na Supabaseu
     systemProperty 'spring.profiles.active', 'test'
+    // varijabla okoline SPRING_DATASOURCE_URL ima prednost pred application-test.properties,
+    // a testovi brišu bazu: URL se zato zabija ovdje, da testovi nikad ne dotaknu Supabase
+    systemProperty 'spring.datasource.url',
+            'jdbc:h2:mem:ai_mafia_backend;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE'
+    systemProperty 'spring.datasource.username', 'sa'
+    systemProperty 'spring.datasource.password', ''
 }
 
