@@ -37,7 +37,8 @@ import java.security.SecureRandom;
 @RequiredArgsConstructor
 public class LobbyService {
 
-    private static final String LOBBY_CODE_CHARACTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    /** Bez O, 0, I i 1 da se kod može pročitati naglas i prepisati bez zabune */
+    private static final String LOBBY_CODE_CHARACTERS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
     private static final int LOBBY_CODE_LENGTH = 6;
     private static final int MAX_LOBBY_CODE_ATTEMPTS = 10;
     private final SecureRandom secureRandom = new SecureRandom();
@@ -126,15 +127,31 @@ public class LobbyService {
 
     private void validateRoleConfiguration(CreateLobbyRequest request) {
         Set<Long> roleIds = new HashSet<>();
+        int mafia = 0;
+        int mafiaTeam = 0;
 
         for (LobbyRoleRequest roleRequest : request.getRoles()) {
             if (!roleIds.add(roleRequest.getRoleId())) {
                 throw new BadRequestException(ErrorCode.INVALID_ROLE_CONFIG, "Ista uloga ne može biti navedena više puta.");
             }
 
-            if (!roleRepository.existsById(roleRequest.getRoleId())) {
-                throw new ResourceNotFoundException(ErrorCode.ROLE_NOT_FOUND, "Uloga ne postoji.");
+            Role role = roleRepository.findById(roleRequest.getRoleId())
+                    .orElseThrow(() -> new ResourceNotFoundException(ErrorCode.ROLE_NOT_FOUND, "Uloga ne postoji."));
+
+            if (GameRules.MAFIA.equals(role.getName())) {
+                mafia += roleRequest.getCount();
             }
+            if (GameRules.MAFIA.equals(role.getName()) || GameRules.DAMA.equals(role.getName())) {
+                mafiaTeam += roleRequest.getCount();
+            }
+        }
+
+        // Bez Mafije nema noćnog ubijanja, a ako je tim mafije jednak ostalima, igra je završena prije početka
+        if (mafia < 1) {
+            throw new BadRequestException(ErrorCode.INVALID_ROLE_CONFIG, "Sastav mora imati barem jednu Mafiju.");
+        }
+        if (mafiaTeam * 2 >= request.getMaxPlayers()) {
+            throw new BadRequestException(ErrorCode.INVALID_ROLE_CONFIG, "Tim mafije mora biti manji od ostalih igrača.");
         }
     }
 

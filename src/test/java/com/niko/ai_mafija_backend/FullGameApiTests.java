@@ -678,6 +678,32 @@ class FullGameApiTests extends GameTestSupport {
     }
 
     @Test
+    void lobbyCompositionNeedsMafiaAndMafiaTeamInMinority() throws Exception {
+        // bez Mafije (ni sama Dama), 2 na 2 i tim mafije u većini
+        for (Map<String, Integer> bad : List.of(
+                Map.of("Građanin", 4),
+                Map.of("Dama", 1, "Građanin", 3),
+                Map.of("Mafia", 2, "Građanin", 2),
+                Map.of("Mafia", 1, "Dama", 1, "Građanin", 2),
+                Map.of("Mafia", 3, "Građanin", 2))) {
+            expectError(post("/api/lobbies", lobbyBody("Niko", bad)), HttpStatus.BAD_REQUEST, INVALID_ROLE_CONFIG);
+        }
+
+        // 2 od 5 je još manjina
+        ok(post("/api/lobbies", lobbyBody("Niko", Map.of("Mafia", 1, "Dama", 1, "Građanin", 3))));
+    }
+
+    @Test
+    void lobbyCodeHasNoLookAlikeCharacters() throws Exception {
+        for (int i = 0; i < 30; i++) {
+            String created = ok(post("/api/lobbies", lobbyBody("Niko" + i, Map.of("Mafia", 1, "Građanin", 3))));
+            String lobbyCode = read(created, "$.code");
+            assertEquals(6, lobbyCode.length());
+            assertTrue(lobbyCode.matches("[A-HJ-NP-Z2-9]{6}"), lobbyCode);
+        }
+    }
+
+    @Test
     void nicknameIsRequiredAndAtMost16Characters() throws Exception {
         String sixteen = "A".repeat(16);
         String seventeen = "A".repeat(17);
