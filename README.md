@@ -36,7 +36,10 @@ Aplikacija je razvijena prema klijent-poslužitelj arhitekturi s podrškom za ko
 - Supabase
 
 ### Dokumentacija
-- SpringDoc OpenAPI (Swagger UI)
+- SpringDoc OpenAPI (Swagger UI), zadano ugašen; lokalno se uključuje s `SWAGGER_ENABLED=true`
+
+### Praćenje grešaka
+- Sentry, uključen samo kad je postavljen `SENTRY_DSN`
 
 ## Autor
 

@@ -725,13 +725,11 @@ class FullGameApiTests extends GameTestSupport {
     }
 
     @Test
-    void publicRolesEndpointMatchesTestEndpoint() throws Exception {
+    void publicRolesEndpointListsAllRoles() throws Exception {
         String roles = ok(mvc.perform(get("/api/roles")));
-        String testRoles = ok(mvc.perform(get("/api/test/roles")));
 
         List<?> list = json.readValue(roles, List.class);
         assertEquals(6, list.size());
-        assertEquals(new HashSet<>(json.readValue(testRoles, List.class)), new HashSet<>(list));
         assertEquals(roleIds.values().stream().sorted().toList(), longs(read(roles, "$[*].id")));
         assertEquals(List.of("Opis: Mafia"), read(roles, "$[?(@.name == 'Mafia')].opis"));
     }

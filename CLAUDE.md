@@ -29,7 +29,10 @@ u frontend repou, `docs/pravila-igre.md`.
 
 - Lozinke, tokeni i ključevi nikad u kodu ni u `application*.properties` – samo env varijable
   (`SPRING_DATASOURCE_PASSWORD`, `SPRING_DATASOURCE_URL`, `SPRING_DATASOURCE_USERNAME`, `APP_CORS_ALLOWED_ORIGINS`,
-  `SUPABASE_ACCESS_TOKEN`…). `.env` je u `.gitignore`.
+  `SUPABASE_ACCESS_TOKEN`, `SENTRY_DSN`…). `.env` je u `.gitignore`.
+- Swagger je zadano ugašen (produkcija). Lokalno ga uključuje `SWAGGER_ENABLED=true` u Run konfiguraciji.
+- Sentry se uključuje samo s `SENTRY_DSN` (na Renderu uz `SENTRY_ENVIRONMENT=production`); šalje samo `log.error`.
+  `SentryConfig` iz događaja uklanja `X-Player-Token`.
 
 ## API ugovor (frontend ga koristi)
 
@@ -51,5 +54,5 @@ u frontend repou, `docs/pravila-igre.md`.
 
 ## Kraj svakog odgovora
 
-1. **Kako provjeriti** – koraci u Swaggeru (`http://localhost:8080/swagger-ui/index.html`): koji endpoint, s kojim tijelom, što se očekuje.
+1. **Kako provjeriti** – koraci u Swaggeru (`http://localhost:8080/swagger-ui/index.html`, treba `SWAGGER_ENABLED=true`): koji endpoint, s kojim tijelom, što se očekuje.
 2. Objašnjenje u 5–8 rečenica: što je promijenjeno i zašto.

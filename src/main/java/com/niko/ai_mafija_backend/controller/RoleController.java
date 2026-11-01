@@ -9,7 +9,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.Comparator;
 import java.util.List;
 
-/** Javni popis uloga za ekran "Nova soba" (umjesto /api/test/roles, koji ostaje radi kompatibilnosti) */
+/** Javni popis uloga za ekran "Nova soba" */
 @RestController
 @RequiredArgsConstructor
 public class RoleController {
