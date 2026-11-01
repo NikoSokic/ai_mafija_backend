@@ -3,6 +3,7 @@ package com.niko.ai_mafija_backend.controller;
 import com.niko.ai_mafija_backend.dto.Requests.CreateLobbyRequest;
 import com.niko.ai_mafija_backend.dto.Requests.JoinLobbyRequest;
 import com.niko.ai_mafija_backend.dto.Requests.HostActionRequest;
+import com.niko.ai_mafija_backend.dto.Requests.KickPlayerRequest;
 import com.niko.ai_mafija_backend.dto.Requests.PlayerAuthRequest;
 import com.niko.ai_mafija_backend.dto.Response.GameStateResponse;
 import com.niko.ai_mafija_backend.dto.Response.CreateLobbyResponse;
@@ -152,6 +153,18 @@ public class LobbyController {
             @PathVariable String code,
             @Valid @RequestBody PlayerAuthRequest request) {
         playerService.leaveLobby(code, request);
+        return ResponseEntity.ok().build();
+    }
+
+    @Operation(summary = "Izbaci igrača (domaćin)",
+            description = "Samo domaćin, samo dok soba čeka igrače (WAITING): igrač se briše i oslobađa mjesto i nadimak. "
+                    + "Događaji PLAYER_LEFT i PLAYER_KICKED {playerId, nickname}. Izbačeni se može opet pridružiti kodom. "
+                    + "Greške: 403 NOT_HOST, 400 CANNOT_KICK_SELF, 404 PLAYER_NOT_FOUND, 409 WRONG_PHASE.")
+    @PostMapping("/{code}/kick")
+    public ResponseEntity<Void> kickPlayer(
+            @PathVariable String code,
+            @Valid @RequestBody KickPlayerRequest request) {
+        playerService.kickPlayer(code, request);
         return ResponseEntity.ok().build();
     }
 

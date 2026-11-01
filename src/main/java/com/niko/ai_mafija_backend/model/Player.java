@@ -56,4 +56,8 @@ public class Player {
     @Builder.Default
     private Boolean isReady = false;
 
+    /** Zadnje javljanje klijenta (heartbeat); null dok se nije javio. Po njemu se zna tko je "Nije tu". */
+    @Column(name = "last_seen_at")
+    private OffsetDateTime lastSeenAt;
+
 }

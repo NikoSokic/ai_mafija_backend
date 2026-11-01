@@ -86,6 +86,7 @@ public class LobbyService {
                 .isHost(true)
                 .isAlive(true)
                 .joinedAt(OffsetDateTime.now())
+                .lastSeenAt(OffsetDateTime.now())
                 .avatarEmoji(cleanAvatar(request.getHostAvatarEmoji()))
                 .playerToken(UUID.randomUUID().toString())
                 .build();

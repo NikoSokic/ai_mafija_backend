@@ -21,6 +21,9 @@ public interface LobbyRepository extends JpaRepository<Lobby,Long> {
     @Query("select l from Lobby l where l.code = :code")
     Optional<Lobby> findByCodeForUpdate(@Param("code") String code);
 
+    /** Sobe koje imaju domaćina: provjera je li domaćin još tu */
+    List<Lobby> findByHostPlayerIsNotNull();
+
     /** Javne sobe za popis: samo sa zadanim statusom, najnovije prve, najviše 20 */
     List<Lobby> findTop20ByStatusAndIsPublicTrueOrderByCreatedAtDesc(String status);
 }

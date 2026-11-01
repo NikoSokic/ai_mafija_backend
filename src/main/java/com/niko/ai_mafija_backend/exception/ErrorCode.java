@@ -30,6 +30,7 @@ public enum ErrorCode {
     ROLE_NOT_ASSIGNED,
     INVALID_ROLE_CONFIG,
     GAME_IN_PROGRESS,
+    CANNOT_KICK_SELF,
 
     // tijek igre
     GAME_NOT_STARTED,

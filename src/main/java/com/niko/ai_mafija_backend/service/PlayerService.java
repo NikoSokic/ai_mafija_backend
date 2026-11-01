@@ -1,16 +1,19 @@
 package com.niko.ai_mafija_backend.service;
 
 import com.niko.ai_mafija_backend.dto.Requests.JoinLobbyRequest;
+import com.niko.ai_mafija_backend.dto.Requests.KickPlayerRequest;
 import com.niko.ai_mafija_backend.dto.Requests.PlayerAuthRequest;
 import com.niko.ai_mafija_backend.dto.Requests.PlayerRoleRequest;
 import com.niko.ai_mafija_backend.dto.Requests.ReconnectRequest;
 import com.niko.ai_mafija_backend.dto.Response.JoinLobbyResponse;
 import com.niko.ai_mafija_backend.dto.Response.LobbyPlayerResponse;
 import com.niko.ai_mafija_backend.dto.Response.HostChangedResponse;
+import com.niko.ai_mafija_backend.dto.Response.PlayerKickedResponse;
 import com.niko.ai_mafija_backend.dto.Response.PlayerLeftResponse;
 import com.niko.ai_mafija_backend.dto.Response.PlayerRoleResponse;
 import com.niko.ai_mafija_backend.dto.Response.ReconnectResponse;
 import com.niko.ai_mafija_backend.dto.Response.CurrentPlayerGameStateResponse;
+import com.niko.ai_mafija_backend.exception.BadRequestException;
 import com.niko.ai_mafija_backend.exception.ConflictException;
 import com.niko.ai_mafija_backend.exception.ErrorCode;
 import com.niko.ai_mafija_backend.exception.ForbiddenException;
@@ -30,6 +33,7 @@ import java.time.OffsetDateTime;
 import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
+import java.util.function.Predicate;
 
 import static com.niko.ai_mafija_backend.service.GameRules.*;
 
@@ -72,6 +76,7 @@ public class PlayerService {
                 .isHost(false)
                 .isAlive(true)
                 .joinedAt(OffsetDateTime.now())
+                .lastSeenAt(OffsetDateTime.now())
                 .playerToken(UUID.randomUUID().toString())
                 .build();
 
@@ -202,27 +207,86 @@ public class PlayerService {
         webSocketService.publishGameStateChangedAfterCommit(lobby.getCode());
     }
 
-    /** Domaćin postaje igrač koji je najranije ušao (prednost imaju živi koji nisu otišli); null ako nema promjene */
+    /**
+     * Domaćin koji izlazi predaje ulogu: igrač koji je najranije ušao (prednost imaju živi koji nisu otišli);
+     * null ako nema promjene. Kad nema nikoga, soba ostaje bez domaćina.
+     */
     private Player handOverHostIfNeeded(Lobby lobby, Player leaving) {
         if (!Boolean.TRUE.equals(leaving.getIsHost())) {
             return null;
         }
-        Player newHost = playerRepository.findByLobby(lobby).stream()
-                .filter(other -> !other.getId().equals(leaving.getId()))
+        Player newHost = nextHost(lobby, leaving, other -> true);
+        moveHost(lobby, leaving, newHost);
+        return newHost;
+    }
+
+    /**
+     * Domaćin se ne javlja: ulogu preuzima prvi prikladan igrač (isti redoslijed kao pri izlasku).
+     * Bivši domaćin ostaje u sobi kao običan igrač. Ako nikoga nema, ništa se ne mijenja i vraća se null.
+     */
+    Player transferHost(Lobby lobby, Player host, Predicate<Player> eligible) {
+        Player newHost = nextHost(lobby, host, eligible);
+        if (newHost == null) {
+            return null;
+        }
+        moveHost(lobby, host, newHost);
+        webSocketService.publishLobbyEventAfterCommit(
+                lobby.getCode(),
+                "HOST_CHANGED",
+                "Domaćin je promijenjen.",
+                new HostChangedResponse(newHost.getId())
+        );
+        return newHost;
+    }
+
+    private Player nextHost(Lobby lobby, Player current, Predicate<Player> eligible) {
+        return playerRepository.findByLobby(lobby).stream()
+                .filter(other -> !other.getId().equals(current.getId()))
                 .filter(other -> other.getPlayerToken() != null)
+                .filter(eligible)
                 .min(Comparator.comparing((Player other) -> !isAlive(other))
                         .thenComparing(Player::getJoinedAt, Comparator.nullsLast(Comparator.naturalOrder()))
                         .thenComparing(Player::getId))
                 .orElse(null);
-        leaving.setIsHost(false);
-        lobby.setHostPlayer(newHost);
-        if (newHost != null) {
-            newHost.setIsHost(true);
-            playerRepository.save(newHost);
+    }
+
+    private void moveHost(Lobby lobby, Player from, Player to) {
+        from.setIsHost(false);
+        lobby.setHostPlayer(to);
+        if (to != null) {
+            to.setIsHost(true);
+            playerRepository.save(to);
         }
-        playerRepository.save(leaving);
+        playerRepository.save(from);
         lobbyRepository.save(lobby);
-        return newHost;
+    }
+
+    /** Domaćin izbacuje igrača koji je otišao (ili smeta) iz čekaonice; izbačeni se može opet pridružiti kodom. */
+    @Transactional
+    public void kickPlayer(String code, KickPlayerRequest request) {
+        Lobby lobby = findLobbyForUpdate(code);
+        playerAuthService.authenticateHostForLobby(request.playerId(), request.playerToken(), lobby);
+
+        if (!LOBBY_WAITING.equals(lobby.getStatus())) {
+            throw new ConflictException(ErrorCode.WRONG_PHASE, "Igrače je moguće izbaciti samo dok soba čeka igru.");
+        }
+        if (request.targetPlayerId().equals(request.playerId())) {
+            throw new BadRequestException(ErrorCode.CANNOT_KICK_SELF, "Domaćin ne može izbaciti sam sebe.");
+        }
+        Player target = playerRepository.findById(request.targetPlayerId())
+                .filter(other -> other.getLobby().getId().equals(lobby.getId()))
+                .orElseThrow(() -> new ResourceNotFoundException(ErrorCode.PLAYER_NOT_FOUND, "Igrač nije u ovoj sobi."));
+
+        playerRepository.delete(target);
+
+        publishPlayerLeft(lobby, target, null);
+        webSocketService.publishLobbyEventAfterCommit(
+                lobby.getCode(),
+                "PLAYER_KICKED",
+                "Domaćin je izbacio igrača.",
+                new PlayerKickedResponse(target.getId(), target.getNickname())
+        );
+        webSocketService.publishGameStateChangedAfterCommit(lobby.getCode());
     }
 
     private void deleteLobby(Lobby lobby, Player lastPlayer) {

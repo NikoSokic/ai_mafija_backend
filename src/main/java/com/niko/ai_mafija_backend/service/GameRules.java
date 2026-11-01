@@ -34,6 +34,16 @@ public final class GameRules {
     /** ostale noći: prijelaz i naracija */
     public static final Duration NIGHT_INTRO = Duration.ofSeconds(10);
 
+    // ---------- prisutnost igrača ----------
+    /** Klijent se javlja otprilike toliko često (src/lib/useHeartbeat.ts) */
+    public static final Duration HEARTBEAT_INTERVAL = Duration.ofSeconds(15);
+    /** Igrač koji se ne javlja toliko je "Nije tu" i ne može preuzeti domaćina */
+    public static final Duration AWAY_AFTER = Duration.ofSeconds(45);
+    /** Čekaonica i kraj igre: domaćin se često zadrži u drugoj aplikaciji dok šalje kod sobe */
+    public static final Duration HOST_ABSENT_LOBBY = Duration.ofSeconds(120);
+    /** Usred igre: bez domaćina nema glasa naratora ni gumba domaćina */
+    public static final Duration HOST_ABSENT_IN_GAME = Duration.ofSeconds(45);
+
     // ---------- faze ----------
     public static final String NIGHT = "NIGHT";
     /** rasprava; glasati se još ne može */
