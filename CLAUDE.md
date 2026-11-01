@@ -21,7 +21,7 @@ u frontend repou, `docs/pravila-igre.md`.
 - Migracija ne smije raditi `ALTER` nad `flyway_schema_history`: Flyway tada stane jer u nju piše preko druge veze.
 - U istoj izmjeni ažuriraj i entitete u `model/`.
 - Testovi migracije ne pokreću (H2), pa novu migraciju isprobaj na lokalnom PostgreSQL-u.
-- Sigurnosne kopije i vraćanje: `db/vracanje-kopije.md`.
+- Sigurnosnih kopija podataka nema: baza drži samo kratkotrajne sobe, a shema se gradi iz migracija.
 - Testovi rade na H2 (profil `test`, `src/test/resources/application-test.properties`, `create-drop`) i nikad ne
   diraju Supabase. `build.gradle` uključuje profil za sve testove, a testne klase imaju i `@ActiveProfiles("test")`.
 
