@@ -215,6 +215,7 @@ public class PlayerService {
                 && gameOutcomeService.finishGameIfWinnerExists(lobby, gameState) == null) {
             voteService.resolveIfAllVoted(lobby, gameState);
             actionService.advanceIntroIfAllReady(lobby, gameState);
+            actionService.reevaluateTurn(lobby, gameState);
             webSocketService.publishGameStateChangedAfterCommit(lobby.getCode());
         }
     }

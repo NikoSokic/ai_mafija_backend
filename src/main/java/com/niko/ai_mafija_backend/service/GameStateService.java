@@ -5,6 +5,7 @@ import com.niko.ai_mafija_backend.dto.Response.CurrentPlayerGameStateResponse;
 import com.niko.ai_mafija_backend.dto.Response.GameStateResponse;
 import com.niko.ai_mafija_backend.dto.Response.LastNightResponse;
 import com.niko.ai_mafija_backend.dto.Response.LobbyPlayerResponse;
+import com.niko.ai_mafija_backend.dto.Response.MafiaRunoffResponse;
 import com.niko.ai_mafija_backend.dto.Response.PublicGameStateResponse;
 import com.niko.ai_mafija_backend.dto.Response.PublicVotingResponse;
 import com.niko.ai_mafija_backend.dto.Response.TeamTargetResponse;
@@ -146,12 +147,30 @@ public class GameStateService {
                 canAct,
                 hasActed,
                 availableActions,
-                canAct ? gameState.getPhaseEndsAt() : null,
+                canAct ? actionEndsAt(gameState) : null,
                 teammates,
                 teamTargets,
                 player.getEliminatedHow(),
-                player.getEliminatedRound()
+                player.getEliminatedRound(),
+                canAct ? actionStartedAt(gameState) : null,
+                mafiaTeam && isMafiaRunoff(gameState) ? mafiaRunoff(gameState) : null
         );
+    }
+
+    /**
+     * Rok odabira za igrača na redu: prvi krug ili drugi krug mafije. Stvarni kraj poteza (phaseEndsAt) se ne šalje:
+     * glumljenom potezu bi otkrio trajanje, a živom se vidi kao prijelaz na sljedeći potez.
+     */
+    private OffsetDateTime actionEndsAt(GameState gameState) {
+        if (isMafiaRunoff(gameState)) {
+            return gameState.getMafiaRunoffEndsAt();
+        }
+        OffsetDateTime firstRoundEnd = firstRoundEndsAt(gameState);
+        return firstRoundEnd != null ? firstRoundEnd : gameState.getPhaseEndsAt();
+    }
+
+    private MafiaRunoffResponse mafiaRunoff(GameState gameState) {
+        return new MafiaRunoffResponse(true, rules.mafiaRunoffCandidates(gameState), gameState.getMafiaRunoffEndsAt());
     }
 
     private VotingStateResponse getVotingState(Player player, GameState gameState) {
@@ -184,10 +203,16 @@ public class GameStateService {
         return new PublicVotingResponse(voterIds, votes, tied);
     }
 
-    /** Noću se rok ne objavljuje svima (otkrio bi tko je na redu); igrač na redu ga dobije u actionEndsAt */
+    /**
+     * Noću je javni rok uvijek najkasniji mogući kraj te vrste poteza, i za živu i za mrtvu ulogu: stvarni kraj
+     * (phaseEndsAt) otkrio bi je li uloga odigrala ili se potez glumi. U uvodu noći nema javnog roka.
+     */
     private OffsetDateTime publicPhaseEndsAt(GameState gameState) {
-        if (gameState == null || NIGHT.equals(gameState.getPhase())) {
+        if (gameState == null) {
             return null;
+        }
+        if (NIGHT.equals(gameState.getPhase())) {
+            return gameState.getCurrentTurnRole() != null ? turnLatestEnd(gameState) : null;
         }
         return gameState.getPhaseEndsAt();
     }

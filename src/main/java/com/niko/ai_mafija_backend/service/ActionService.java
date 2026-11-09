@@ -23,21 +23,24 @@ import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.stream.Collectors;
 
 import static com.niko.ai_mafija_backend.service.GameRules.*;
 
 /**
- * Noć: uvodna pauza, potezi uloga redom (MAFIA → DAMA → Doktor → Policajac → Novinar),
- * svaki s rokom, i obrada noći na kraju.
+ * Noć: uvodna pauza, potezi uloga redom (MAFIA → DAMA → Doktor → Policajac → Novinar) i obrada noći na kraju.
  *
- * Svaki potez traje isto (TURN_NARRATION + NIGHT_TURN) i ne završava ranije kad svi odigraju;
- * potez mrtve uloge se "glumi" jednako dugo, da nitko ne zna da je uloga mrtva.
- * Mafijaši smiju mijenjati metu do isteka roka; tada vrijedi većina.
+ * Potez = TURN_NARRATION + odabir. Živa uloga završava ACTED_TAIL nakon što odigra, a najkasnije nakon
+ * NIGHT_TURN_MAX. Mafija: svi isto → kraj; različito → drugi krug (MAFIA_RUNOFF_TIME) samo između tih meta.
+ * Potez mrtve uloge se glumi trajanjem nedavnog stvarnog poteza (TurnDurationService).
+ * Stvarni kraj (phaseEndsAt) je tajan; javno se vidi samo najdulji mogući rok i prijelaz na sljedeći potez.
  */
 @Service
 @RequiredArgsConstructor
@@ -51,6 +54,8 @@ public class ActionService {
     private final WebSocketService webSocketService;
     private final GameOutcomeService gameOutcomeService;
     private final GameRulesService rules;
+    private final TurnDurationService turnDurationService;
+    private final GameRandom random;
 
     @Transactional
     public ActionResponse submitAction(ActionRequest request) {
@@ -98,12 +103,15 @@ public class ActionService {
         }
 
         List<Long> allowedTargets = rules.allowedTargets(player, gameState, actionType);
-        validateTarget(player, target, actionType, allowedTargets);
+        boolean runoff = KILL.equals(actionType) && isMafiaRunoff(gameState);
+        validateTarget(player, target, actionType, allowedTargets, runoff);
         if (secondTarget != null) {
-            validateTarget(player, secondTarget, actionType, allowedTargets);
+            validateTarget(player, secondTarget, actionType, allowedTargets, runoff);
         }
 
-        // Mafijaši smiju promijeniti metu do isteka poteza; ostale uloge igraju jednom
+        Long agreedBefore = KILL.equals(actionType) ? rules.mafiaAgreedTarget(lobby, gameState) : null;
+
+        // Mafijaši smiju promijeniti metu do kraja poteza; ostale uloge igraju jednom
         GameAction action = gameActionRepository
                 .findFirstByPlayerAndPhaseAndRoundNumber(player, NIGHT, gameState.getRoundNumber())
                 .orElse(null);
@@ -127,10 +135,18 @@ public class ActionService {
         String investigationResult = INVESTIGATE.equals(actionType) ? getInvestigationResult(target) : null;
         String journalistResult = COMPARE.equals(actionType) ? getJournalistResult(target, secondTarget) : null;
 
-        // potez traje do isteka roka i kad su svi odigrali, pa se noć ovdje nikad ne obrađuje
+        // Odigran potez samo pomakne stvarni (tajni) kraj poteza; prijelaz na sljedeći potez radi GameTimerService,
+        // pa se noć ovdje nikad ne obrađuje
         ResolveNightResponse resolveResult = null;
+        if (KILL.equals(actionType)) {
+            updateMafiaTurn(lobby, gameState, agreedBefore);
+        } else {
+            endTurnSoonIfAllActed(lobby, gameState);
+        }
+        gameStateRepository.save(gameState);
         // Događaj svima usred poteza otkrio bi da je uloga živa (glumljeni potez ga ne šalje), pa se šalje
-        // samo za KILL: suigrači mafije uživo vide tko je koga odabrao. Ostali potezi ne mijenjaju javno stanje.
+        // samo za KILL: suigrači mafije uživo vide tko je koga odabrao (i drugi krug). Ostali potezi ne mijenjaju
+        // javno stanje.
         if (KILL.equals(actionType)) {
             webSocketService.publishGameStateChangedAfterCommit(lobby.getCode());
         }
@@ -250,31 +266,187 @@ public class ActionService {
         gameState.setTieBreakPlayerIds(null);
         gameState.setNightKilledPlayerIds(null);
         gameState.setNightSilencedPlayerIds(null);
+        gameState.setNightMafiaTargetId(null);
+        clearTurn(gameState);
         gameState.setPhaseEndsAt(now.plus(roundNumber == 1 ? FIRST_NIGHT_INTRO_MAX : NIGHT_INTRO));
         gameState.setUpdateAt(now);
         gameStateRepository.save(gameState);
         webSocketService.publishGameStateChangedAfterCommit(lobby.getCode());
     }
 
-    /** Istekao je uvod ili rok poteza: tko nije odigrao, gubi potez. */
+    /**
+     * Stigao je stvarni kraj uvoda ili poteza (phaseEndsAt), poziva ga GameTimerService:
+     * - uvod, glumljeni potez i potezi bez mafije: sljedeći potez (tko nije odigrao, gubi potez);
+     * - MAFIA: dogovor ili jedina odabrana meta vrijedi; različite mete otvaraju drugi krug; istek drugog kruga
+     *   bez dogovora bira nasumičnog kandidata; kad nitko nije odabrao, meta je nasumični živi igrač.
+     */
     public void handleNightTimeout(Lobby lobby, GameState gameState) {
+        String turn = gameState.getCurrentTurnRole();
+        if (TURN_MAFIA.equals(turn) && !Boolean.TRUE.equals(gameState.getTurnFake())
+                && !settleMafiaTurn(lobby, gameState)) {
+            return;
+        }
+        recordTurnDuration(gameState, gameState.getPhaseEndsAt());
         advanceTurn(lobby, gameState);
+    }
+
+    /**
+     * Netko je usred poteza ispao (izašao iz igre): ako su svi preostali na redu već odigrali,
+     * potez završava kao da su upravo odigrali.
+     */
+    public void reevaluateTurn(Lobby lobby, GameState gameState) {
+        if (!NIGHT.equals(gameState.getPhase()) || gameState.getCurrentTurnRole() == null
+                || Boolean.TRUE.equals(gameState.getTurnFake())) {
+            return;
+        }
+        if (TURN_MAFIA.equals(gameState.getCurrentTurnRole())) {
+            updateMafiaTurn(lobby, gameState, null);
+        } else {
+            endTurnSoonIfAllActed(lobby, gameState);
+        }
+        gameStateRepository.save(gameState);
     }
 
     /** Sljedeći potez noći, ili obrada noći kad potezi ponestanu */
     private ResolveNightResponse advanceTurn(Lobby lobby, GameState gameState) {
         String nextTurn = nextTurn(lobby, gameState.getCurrentTurnRole());
+        clearTurn(gameState);
         if (nextTurn == null) {
             return resolveNight(lobby, gameState);
         }
 
+        // Je li uloga živa, odluči se na početku poteza. Glumljeni potez dobije trajanje sada; ono se nigdje ne
+        // šalje, a javno stanje izgleda isto kao za živu ulogu (GameRules.turnLatestEnd).
         OffsetDateTime now = OffsetDateTime.now();
+        boolean fake = rules.turnActors(lobby, nextTurn).isEmpty();
         gameState.setCurrentTurnRole(nextTurn);
-        gameState.setPhaseEndsAt(now.plus(TURN_NARRATION).plus(NIGHT_TURN));
+        gameState.setTurnStartedAt(now);
+        gameState.setTurnFake(fake);
+        OffsetDateTime actionStart = actionStartedAt(gameState);
+        gameState.setPhaseEndsAt(fake
+                ? actionStart.plus(turnDurationService.fakeDuration(nextTurn))
+                : firstRoundEndsAt(gameState));
         gameState.setUpdateAt(now);
         gameStateRepository.save(gameState);
         webSocketService.publishGameStateChangedAfterCommit(lobby.getCode());
         return null;
+    }
+
+    private void clearTurn(GameState gameState) {
+        gameState.setCurrentTurnRole(null);
+        gameState.setTurnStartedAt(null);
+        gameState.setTurnFake(null);
+        gameState.setMafiaRunoffPlayerIds(null);
+        gameState.setMafiaRunoffEndsAt(null);
+    }
+
+    /** Svi na redu (npr. oba Doktora) su odigrali: potez završava nakon kratke pauze, ako to nije kasnije od roka */
+    private void endTurnSoonIfAllActed(Lobby lobby, GameState gameState) {
+        List<Player> actors = rules.turnActors(lobby, gameState.getCurrentTurnRole());
+        if (actors.isEmpty() || !actors.stream().allMatch(actor -> rules.hasActed(actor, gameState))) {
+            return;
+        }
+        OffsetDateTime end = tailEnd(gameState);
+        if (gameState.getPhaseEndsAt() == null || end.isBefore(gameState.getPhaseEndsAt())) {
+            gameState.setPhaseEndsAt(end);
+        }
+    }
+
+    /**
+     * Nakon odabira mafije (ili izlaska mafijaša) postavi stvarni kraj poteza:
+     * svi su odabrali istu metu → kraj nakon kratke pauze; svi su odabrali, a mete su različite → drugi krug odmah
+     * (ili rok drugog kruga, ako već traje); nisu svi odabrali → rok trenutnog kruga.
+     *
+     * @param agreedBefore zajednička meta prije ovog odabira: ponovljeni isti dogovor ne pomiče kraj
+     */
+    private void updateMafiaTurn(Lobby lobby, GameState gameState, Long agreedBefore) {
+        int actorCount = rules.turnActors(lobby, TURN_MAFIA).size();
+        Map<Long, Long> choices = rules.mafiaChoices(lobby, gameState);
+        Set<Long> targets = new TreeSet<>(choices.values());
+        boolean allChose = actorCount > 0 && choices.size() == actorCount;
+        boolean runoff = isMafiaRunoff(gameState);
+
+        if (allChose && targets.size() == 1) {
+            if (!targets.iterator().next().equals(agreedBefore) || gameState.getPhaseEndsAt() == null) {
+                gameState.setPhaseEndsAt(tailEnd(gameState));
+            }
+        } else if (allChose && !runoff) {
+            openMafiaRunoff(gameState, targets);
+        } else {
+            OffsetDateTime roundEnd = runoff ? gameState.getMafiaRunoffEndsAt() : firstRoundEndsAt(gameState);
+            if (roundEnd != null) {
+                gameState.setPhaseEndsAt(roundEnd);
+            }
+        }
+    }
+
+    /** Drugi krug: MAFIA_RUNOFF_TIME, a birati se smije samo između meta iz prvog kruga */
+    private void openMafiaRunoff(GameState gameState, Set<Long> candidates) {
+        OffsetDateTime end = notBeforeActionStart(gameState).plus(MAFIA_RUNOFF_TIME);
+        OffsetDateTime latest = turnLatestEnd(gameState);
+        if (latest != null && end.isAfter(latest)) {
+            end = latest;
+        }
+        gameState.setMafiaRunoffPlayerIds(GameRulesService.joinIds(List.copyOf(candidates)));
+        gameState.setMafiaRunoffEndsAt(end);
+        gameState.setPhaseEndsAt(end);
+    }
+
+    /**
+     * Kraj poteza MAFIA (rok ili pauza nakon dogovora): odluči metu i spremi je u nightMafiaTargetId.
+     * Vraća false kad se umjesto kraja otvara drugi krug.
+     */
+    private boolean settleMafiaTurn(Lobby lobby, GameState gameState) {
+        Set<Long> targets = new TreeSet<>(rules.mafiaChoices(lobby, gameState).values());
+        Long target;
+        if (targets.size() == 1) {
+            // dogovor, ili je do isteka odabrao samo dio mafije i to istu metu
+            target = targets.iterator().next();
+        } else if (isMafiaRunoff(gameState)) {
+            List<Long> alive = alivePlayerIds(lobby);
+            List<Long> candidates = rules.mafiaRunoffCandidates(gameState).stream().filter(alive::contains).toList();
+            target = random.pick(candidates.isEmpty() ? alive : candidates);
+        } else if (targets.size() > 1) {
+            openMafiaRunoff(gameState, targets);
+            gameState.setUpdateAt(OffsetDateTime.now());
+            gameStateRepository.save(gameState);
+            // tim mafije treba vidjeti drugi krug; javno stanje se ne mijenja
+            webSocketService.publishGameStateChangedAfterCommit(lobby.getCode());
+            return false;
+        } else {
+            // nitko nije odabrao: strada nasumični živi igrač, i iz tima mafije (Doktor ga i dalje može spasiti)
+            target = random.pick(alivePlayerIds(lobby));
+        }
+        gameState.setNightMafiaTargetId(target);
+        return true;
+    }
+
+    /** Kraj poteza nakon odigranog: pauza ACTED_TAIL od sada (ili od kraja naracije), najkasnije javni rok */
+    private OffsetDateTime tailEnd(GameState gameState) {
+        OffsetDateTime end = notBeforeActionStart(gameState).plus(random.between(ACTED_TAIL_MIN, ACTED_TAIL_MAX));
+        OffsetDateTime latest = turnLatestEnd(gameState);
+        return latest != null && end.isAfter(latest) ? latest : end;
+    }
+
+    /** Sada, ali ne prije kraja naracije: tko odigra dok narator još govori, ne skraćuje naraciju */
+    private OffsetDateTime notBeforeActionStart(GameState gameState) {
+        OffsetDateTime now = OffsetDateTime.now();
+        OffsetDateTime actionStart = actionStartedAt(gameState);
+        return actionStart != null && actionStart.isAfter(now) ? actionStart : now;
+    }
+
+    /** Trajanje stvarnog poteza od kraja naracije do kraja poteza (za glumljene poteze); glumljeni se ne broje */
+    private void recordTurnDuration(GameState gameState, OffsetDateTime endedAt) {
+        OffsetDateTime actionStart = actionStartedAt(gameState);
+        if (gameState.getCurrentTurnRole() == null || Boolean.TRUE.equals(gameState.getTurnFake())
+                || actionStart == null || endedAt == null) {
+            return;
+        }
+        turnDurationService.record(gameState.getCurrentTurnRole(), Duration.between(actionStart, endedAt));
+    }
+
+    private List<Long> alivePlayerIds(Lobby lobby) {
+        return rules.alivePlayers(lobby).stream().map(Player::getId).sorted().toList();
     }
 
     private String nextTurn(Lobby lobby, String currentTurn) {
@@ -289,13 +461,17 @@ public class ActionService {
     }
 
     /**
-     * Obrada noći: meta mafije (većina) umire, osim ako ju je zaštitio točno jedan Doktor.
+     * Obrada noći: meta mafije umire, osim ako ju je zaštitio točno jedan Doktor.
      * Dva Doktora na istom igraču = predoziranje (umire). Zatim pobjednik ili dan (rasprava).
+     * Izvještaj (NIGHT_RESOLVED, lastNight) ne govori je li meta odabrana ili nasumična.
      */
     public ResolveNightResponse resolveNight(Lobby lobby, GameState gameState) {
         Integer roundNumber = gameState.getRoundNumber();
         List<GameAction> actions = rules.nightActions(lobby, roundNumber);
-        Long mafiaTargetId = rules.mafiaKillTarget(lobby, roundNumber);
+        // potez MAFIA je došao do kraja i odlučio metu; inače je domaćin završio noć ranije pa vrijedi većina
+        Long mafiaTargetId = gameState.getNightMafiaTargetId() != null
+                ? gameState.getNightMafiaTargetId()
+                : rules.mafiaKillTarget(lobby, roundNumber);
 
         Map<Long, Long> saveCounts = actions.stream()
                 .filter(action -> SAVE.equals(action.getActionType()))
@@ -322,7 +498,8 @@ public class ActionService {
 
         gameState.setNightKilledPlayerIds(GameRulesService.joinIds(killedIds));
         gameState.setNightSilencedPlayerIds(GameRulesService.joinIds(silencedIds));
-        gameState.setCurrentTurnRole(null);
+        gameState.setNightMafiaTargetId(null);
+        clearTurn(gameState);
         gameState.setPhaseEndsAt(null);
 
         String winner = gameOutcomeService.determineWinner(lobby);
@@ -372,7 +549,8 @@ public class ActionService {
         return target;
     }
 
-    private void validateTarget(Player actor, Player target, String actionType, List<Long> allowedTargets) {
+    private void validateTarget(Player actor, Player target, String actionType, List<Long> allowedTargets,
+                                boolean mafiaRunoff) {
         if (!isAlive(target)) {
             throw new ConflictException(ErrorCode.INVALID_TARGET, "Ne možeš ciljati mrtvog igrača.");
         }
@@ -384,6 +562,8 @@ public class ActionService {
             message = "Ne možeš odabrati sebe.";
         } else if (KILL.equals(actionType) && isMafiaTeam(target)) {
             message = "Ne možeš ciljati člana svog tima.";
+        } else if (mafiaRunoff) {
+            message = "U drugom krugu možeš birati samo između meta iz prvog kruga.";
         } else {
             message = "Taj igrač nije dopuštena meta.";
         }

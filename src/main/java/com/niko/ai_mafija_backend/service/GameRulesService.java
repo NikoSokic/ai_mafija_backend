@@ -173,8 +173,32 @@ public class GameRulesService {
     }
 
     /**
-     * Meta mafije ove noći: ona koju je odabrala većina živih članova koji ubijaju.
-     * Kad se slože, to je zajednička meta; kod izjednačenja nitko ne strada (null).
+     * Odabiri onih koji ubijaju u potezu MAFIA: id igrača → id mete (samo žive mete).
+     * Prazno kad nitko nije odabrao.
+     */
+    public Map<Long, Long> mafiaChoices(Lobby lobby, GameState gameState) {
+        Set<Long> actorIds = turnActors(lobby, TURN_MAFIA).stream().map(Player::getId).collect(Collectors.toSet());
+        return nightActions(lobby, gameState.getRoundNumber()).stream()
+                .filter(action -> KILL.equals(action.getActionType()))
+                .filter(action -> actorIds.contains(action.getPlayer().getId()))
+                .filter(action -> isAlive(action.getTargetPlayer()))
+                .collect(Collectors.toMap(action -> action.getPlayer().getId(),
+                        action -> action.getTargetPlayer().getId(), (first, second) -> second));
+    }
+
+    /** Zajednička meta kad su svi živi koji ubijaju odabrali istu; inače null */
+    public Long mafiaAgreedTarget(Lobby lobby, GameState gameState) {
+        int actorCount = turnActors(lobby, TURN_MAFIA).size();
+        Map<Long, Long> choices = mafiaChoices(lobby, gameState);
+        Set<Long> targets = Set.copyOf(choices.values());
+        return actorCount > 0 && choices.size() == actorCount && targets.size() == 1
+                ? targets.iterator().next()
+                : null;
+    }
+
+    /**
+     * Meta mafije po većini odabira, za noć koju je domaćin završio prije kraja poteza MAFIA
+     * (inače vrijedi GameState.nightMafiaTargetId). Kod izjednačenja nitko ne strada (null).
      */
     public Long mafiaKillTarget(Lobby lobby, Integer roundNumber) {
         Map<Long, Long> counts = nightActions(lobby, roundNumber).stream()
@@ -184,12 +208,23 @@ public class GameRulesService {
         return uniqueLeader(counts);
     }
 
-    /** Koga igrač smije odabrati za akciju. Sebe smiju Doktor i Dama (utišavanje); mafija ne cilja svoj tim. */
+    /** Kandidati drugog kruga mafije (mete iz prvog kruga); prazno kad drugi krug ne traje */
+    public List<Long> mafiaRunoffCandidates(GameState gameState) {
+        return isMafiaRunoff(gameState) ? parseIds(gameState.getMafiaRunoffPlayerIds()) : List.of();
+    }
+
+    /**
+     * Koga igrač smije odabrati za akciju. Sebe smiju Doktor i Dama (utišavanje); mafija ne cilja svoj tim,
+     * a u drugom krugu bira samo između kandidata iz prvog kruga.
+     */
     public List<Long> allowedTargets(Player actor, GameState gameState, String actionType) {
         boolean selfAllowed = SAVE.equals(actionType) || SILENCE.equals(actionType);
+        boolean runoff = KILL.equals(actionType) && isMafiaRunoff(gameState);
+        List<Long> candidates = runoff ? mafiaRunoffCandidates(gameState) : List.of();
         return alivePlayers(actor.getLobby()).stream()
                 .filter(target -> selfAllowed || !target.getId().equals(actor.getId()))
                 .filter(target -> !KILL.equals(actionType) || !isMafiaTeam(target))
+                .filter(target -> !runoff || candidates.contains(target.getId()))
                 .map(Player::getId)
                 .sorted()
                 .toList();

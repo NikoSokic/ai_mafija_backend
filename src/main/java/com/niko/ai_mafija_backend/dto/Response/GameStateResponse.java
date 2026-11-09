@@ -4,7 +4,9 @@ import java.time.OffsetDateTime;
 import java.util.List;
 
 /**
- * @param phaseEndsAt          kraj rasprave / glasanja; tijekom noći null (rok poteza je u currentPlayer.actionEndsAt)
+ * @param phaseEndsAt          kraj rasprave / glasanja; tijekom noćnog poteza najkasniji mogući kraj te vrste poteza
+ *                             (naracija + 13 s, MAFIA još + 10 s drugog kruga) – isto za živu i mrtvu ulogu, a potez
+ *                             često završi ranije (novi currentTurnRole). U uvodu noći null.
  * @param serverTime           vrijeme poslužitelja, da klijent može ispraviti razliku u satu
  * @param silencedPlayerIds    utišani u tekućem danu
  * @param nightKilledPlayerIds tko je stradao u noći prije tekućeg dana

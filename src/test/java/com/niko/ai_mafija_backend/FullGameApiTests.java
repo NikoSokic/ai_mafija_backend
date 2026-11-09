@@ -121,6 +121,15 @@ class FullGameApiTests extends GameTestSupport {
         assertEquals(6, killTargets.size());
         assertFalse(killTargets.contains(mafia.id()));
         assertFalse(killTargets.contains(dama.id()));
+        // traka vremena za igrača na redu; javni rok je najdulji mogući potez mafije, isti za sve
+        assertTrue(read(mafiaView, "$.currentPlayer.actionStartedAt") != null);
+        assertTrue(read(mafiaView, "$.currentPlayer.actionEndsAt") != null);
+        assertNull(read(mafiaView, "$.currentPlayer.mafiaRunoff"));
+        String citizenView = gameState(g1);
+        assertEquals((Object) read(mafiaView, "$.phaseEndsAt"), read(citizenView, "$.phaseEndsAt"));
+        assertTrue(read(citizenView, "$.phaseEndsAt") != null);
+        assertNull(read(citizenView, "$.currentPlayer.actionStartedAt"));
+        assertNull(read(citizenView, "$.currentPlayer.mafiaRunoff"));
         expectError(act(doktor, "SAVE", doktor, null), HttpStatus.FORBIDDEN, NOT_YOUR_TURN);
         expectError(act(mafia, "KILL", dama, null), HttpStatus.CONFLICT, INVALID_TARGET);
         ok(act(mafia, "KILL", g1, null));
@@ -406,51 +415,54 @@ class FullGameApiTests extends GameTestSupport {
 
     @Test
     void damaAloneAgainstOneCitizenWinsAtNight() throws Exception {
-        createAndStart(Map.of("Mafia", 1, "Dama", 1, "Građanin", 3));
+        createAndStart(Map.of("Mafia", 1, "Dama", 1, "Građanin", 4));
         Seat mafia = role("Mafia");
         Seat dama = role("Dama");
         Seat g1 = byRole.get("Građanin").get(0);
         Seat g2 = byRole.get("Građanin").get(1);
         Seat g3 = byRole.get("Građanin").get(2);
+        Seat g4 = byRole.get("Građanin").get(3);
 
-        // noć 1: nitko ne odigra (tko ne odigra, gubi potez); uloge kojih nema (Doktor…) se preskaču
+        // noć 1: Mafija ubija, Dama ne odigra (tko ne odigra, gubi potez); uloge kojih nema (Doktor…) se preskaču
         timeout();
         assertEquals("MAFIA", turn());
+        ok(act(mafia, "KILL", g1, null));
         timeout();
         assertEquals("DAMA", turn());
         timeout();
         String state = gameState(host);
         assertEquals("DAY", read(state, "$.phase"));
-        assertEquals(List.of(), longs(read(state, "$.nightKilledPlayerIds")));
+        assertEquals(List.of(g1.id()), longs(read(state, "$.nightKilledPlayerIds")));
+        assertEquals(List.of(), longs(read(state, "$.silencedPlayerIds")));
 
         // dan 1: Mafija ispada, Dama ostaje sama protiv troje
         timeout();
-        ok(castVote(g1, mafia));
         ok(castVote(g2, mafia));
         ok(castVote(g3, mafia));
-        ok(castVote(dama, g1));
-        assertEquals("ELIMINATED", read(ok(castVote(mafia, g1)), "$.resolveResult.result"));
+        ok(castVote(g4, mafia));
+        ok(castVote(dama, g2));
+        assertEquals("ELIMINATED", read(ok(castVote(mafia, g2)), "$.resolveResult.result"));
         assertEquals("NIGHT", read(gameState(host), "$.phase"));
 
         // noć 2: Dama dobiva KILL, noć ide dalje kroz glumljeni Damin potez
-        damaKills(dama, g1);
+        damaKills(dama, g2);
         state = gameState(host);
         assertEquals("DAY", read(state, "$.phase"));
-        assertEquals(List.of(g1.id()), longs(read(state, "$.nightKilledPlayerIds")));
+        assertEquals(List.of(g2.id()), longs(read(state, "$.nightKilledPlayerIds")));
         // Dama protiv dvoje: igra traje
         assertFalse(bool(state, "$.gameFinished"));
 
         // dan 2: svi suzdržani, nitko ne ispada
         timeout();
         ok(castVote(dama, null));
-        ok(castVote(g2, null));
-        assertEquals("NO_ELIMINATION", read(ok(castVote(g3, null)), "$.resolveResult.result"));
+        ok(castVote(g3, null));
+        assertEquals("NO_ELIMINATION", read(ok(castVote(g4, null)), "$.resolveResult.result"));
 
         // noć 3: Dama ubija i ostaje sama protiv jednog građanina = pobjeda mafije
-        damaKills(dama, g2);
+        damaKills(dama, g3);
         state = gameState(host);
-        assertFalse(alive(state, g2));
-        assertTrue(alive(state, g3));
+        assertFalse(alive(state, g3));
+        assertTrue(alive(state, g4));
         assertEquals("FINISHED", read(state, "$.phase"));
         assertTrue(bool(state, "$.gameFinished"));
         assertEquals("MAFIA_WIN", read(state, "$.winner"));
@@ -628,19 +640,24 @@ class FullGameApiTests extends GameTestSupport {
         assertEquals("CITIZENS_WIN", read(gameState(host), "$.winner"));
     }
 
-    /** Od poteza mafije (Mafija i 3 građanina): nitko ne strada, pa građani izglasaju Mafiju */
+    /** Od poteza mafije (Mafija i 3 građanina): Mafija ubije zadnjeg građanina, pa preostala dva izglasaju Mafiju */
     private void citizensVoteOutMafia() throws Exception {
         Seat mafia = role("Mafia");
         List<Seat> citizens = byRole.get("Građanin");
+        Seat victim = citizens.getLast();
+        List<Seat> survivors = citizens.subList(0, citizens.size() - 1);
         assertEquals("MAFIA", turn());
+        ok(act(mafia, "KILL", victim, null));
         timeout();
-        assertEquals("DAY", read(gameState(host), "$.phase"));
+        String state = gameState(host);
+        assertEquals("DAY", read(state, "$.phase"));
+        assertEquals(List.of(victim.id()), longs(read(state, "$.nightKilledPlayerIds")));
         timeout();
         assertEquals("VOTING", read(gameState(host), "$.phase"));
-        for (Seat citizen : citizens) {
+        for (Seat citizen : survivors) {
             ok(castVote(citizen, mafia));
         }
-        assertEquals("CITIZENS_WIN", read(ok(castVote(mafia, citizens.getFirst())), "$.resolveResult.result"));
+        assertEquals("CITIZENS_WIN", read(ok(castVote(mafia, survivors.getFirst())), "$.resolveResult.result"));
     }
 
     private Lobby currentLobby() {

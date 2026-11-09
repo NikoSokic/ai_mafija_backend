@@ -4,6 +4,7 @@ import com.niko.ai_mafija_backend.model.GameState;
 import com.niko.ai_mafija_backend.model.Player;
 
 import java.time.Duration;
+import java.time.OffsetDateTime;
 import java.util.List;
 
 /**
@@ -19,13 +20,29 @@ public final class GameRules {
     public static final Duration DISCUSSION = Duration.ofSeconds(150);
     public static final Duration DISCUSSION_EXTENSION = Duration.ofSeconds(30);
     public static final Duration VOTING = Duration.ofSeconds(60);
-    /**
-     * Potez uloge traje uvijek isto (narator + odabir), i kad igrač odigra ranije i kad je uloga mrtva,
-     * da se iz trajanja noći ne može zaključiti tko je živ.
-     */
-    public static final Duration NIGHT_TURN = Duration.ofSeconds(20);
     /** narator uspava prethodnu ulogu i budi ovu prije njezinog odabira */
-    public static final Duration TURN_NARRATION = Duration.ofSeconds(6);
+    public static final Duration TURN_NARRATION = Duration.ofSeconds(4);
+    /** najdulji odabir (nakon naracije); tko do tada ne odigra, gubi potez */
+    public static final Duration NIGHT_TURN_MAX = Duration.ofSeconds(13);
+    /** pauza nakon što uloga odigra, nasumično ACTED_TAIL_MIN–ACTED_TAIL_MAX */
+    public static final Duration ACTED_TAIL_MIN = Duration.ofSeconds(1);
+    public static final Duration ACTED_TAIL_MAX = Duration.ofSeconds(4);
+    /** drugi krug mafije kad mafijaši odaberu različite mete; birati se može samo između njih */
+    public static final Duration MAFIA_RUNOFF_TIME = Duration.ofSeconds(10);
+    /**
+     * Glumljeni potez (uloga je mrtva) traje kao nasumični nedavni stvarni potez iste vrste (TurnDurationService).
+     * Dok ih nema dovoljno, nasumično FAKE_TURN_FALLBACK_MIN–FAKE_TURN_FALLBACK_MAX.
+     */
+    public static final Duration FAKE_TURN_FALLBACK_MIN = Duration.ofSeconds(4);
+    public static final Duration FAKE_TURN_FALLBACK_MAX = Duration.ofSeconds(10);
+    /** glumljeni potez nikad ne traje kraće od ovoga (ni dulje od najduljeg mogućeg poteza te vrste) */
+    public static final Duration FAKE_TURN_MIN = Duration.ofSeconds(3);
+    /** glumljeni potez bira među toliko zadnjih stvarnih trajanja… */
+    public static final int TURN_DURATION_SAMPLE = 100;
+    /** …ali tek kad ih ima barem toliko */
+    public static final int TURN_DURATION_MIN_SAMPLES = 10;
+    /** koliko zadnjih trajanja se čuva po vrsti poteza */
+    public static final int TURN_DURATION_KEEP = 500;
     /**
      * prva noć: igrači gledaju kartu uloge; uvod završava kad su svi živi spremni ili kad domaćin preskoči,
      * a ovo je sigurnosni rok da igra ne zapne ako netko zatvori aplikaciju
@@ -121,6 +138,39 @@ public final class GameRules {
     /** Dan u širem smislu: rasprava i glasanje. Tada vrijede utišanost i jutarnji izvještaj. */
     public static boolean isDaytime(String phase) {
         return DAY.equals(phase) || isVotingPhase(phase);
+    }
+
+    // ---------- rokovi noćnog poteza ----------
+    // Potez počinje naracijom (turnStartedAt), pa slijedi odabir. Svi rokovi su null kad potez nema turnStartedAt.
+
+    /** Najdulje moguće trajanje poteza nakon naracije: MAFIA ima i drugi krug */
+    public static Duration turnMaxDuration(String turn) {
+        return TURN_MAFIA.equals(turn) ? NIGHT_TURN_MAX.plus(MAFIA_RUNOFF_TIME) : NIGHT_TURN_MAX;
+    }
+
+    /** Kraj naracije: od tada uloga bira */
+    public static OffsetDateTime actionStartedAt(GameState gameState) {
+        return gameState.getTurnStartedAt() == null ? null : gameState.getTurnStartedAt().plus(TURN_NARRATION);
+    }
+
+    /** Rok prvog (za sve uloge jedinog) kruga odabira */
+    public static OffsetDateTime firstRoundEndsAt(GameState gameState) {
+        OffsetDateTime start = actionStartedAt(gameState);
+        return start == null ? null : start.plus(NIGHT_TURN_MAX);
+    }
+
+    /** Najkasniji mogući kraj poteza ove vrste. To je i javni phaseEndsAt, i za živu i za mrtvu ulogu. */
+    public static OffsetDateTime turnLatestEnd(GameState gameState) {
+        OffsetDateTime start = actionStartedAt(gameState);
+        return start == null ? null : start.plus(turnMaxDuration(gameState.getCurrentTurnRole()));
+    }
+
+    /** Traje li drugi krug mafije */
+    public static boolean isMafiaRunoff(GameState gameState) {
+        return gameState != null
+                && NIGHT.equals(gameState.getPhase())
+                && TURN_MAFIA.equals(gameState.getCurrentTurnRole())
+                && gameState.getMafiaRunoffPlayerIds() != null;
     }
 
     /** Koju akciju uloga koristi u svom potezu */

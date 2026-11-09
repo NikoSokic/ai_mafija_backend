@@ -7,6 +7,8 @@ import java.util.List;
  * Javno stanje igre – stiže u događaju GAME_STATE_CHANGED.
  *
  * @param voting          null dok glasanje nije otvoreno
+ * @param phaseEndsAt     kraj rasprave / glasanja; tijekom noćnog poteza najkasniji mogući kraj te vrste poteza
+ *                        (isto za živu i mrtvu ulogu; potez često završi ranije). U uvodu noći null.
  * @param currentTurnRole koja je uloga noću budna (MAFIA, DAMA, Doktor…); null u uvodu noći i danju.
  *                        Ne otkriva tko je živ: potez dobije svaka uloga iz sastava, mrtva glumljeni.
  * @param lastNight       rezultat zadnje noći tijekom dana (DAY, VOTING, TIE_BREAK); inače null

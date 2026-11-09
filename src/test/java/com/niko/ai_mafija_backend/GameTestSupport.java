@@ -15,19 +15,24 @@ import com.niko.ai_mafija_backend.repository.LobbyRoleRepository;
 import com.niko.ai_mafija_backend.repository.PlayerRepository;
 import com.niko.ai_mafija_backend.repository.ReclaimRequestRepository;
 import com.niko.ai_mafija_backend.repository.RoleRepository;
+import com.niko.ai_mafija_backend.repository.TurnDurationRepository;
 import com.niko.ai_mafija_backend.repository.VoteRepository;
 import com.niko.ai_mafija_backend.service.ActionService;
 import com.niko.ai_mafija_backend.service.GamePhaseService;
+import com.niko.ai_mafija_backend.service.GameRandom;
 import com.niko.ai_mafija_backend.service.GameStateService;
 import com.niko.ai_mafija_backend.service.PlayerService;
+import com.niko.ai_mafija_backend.service.TurnDurationService;
 import com.niko.ai_mafija_backend.service.VoteService;
 import org.junit.jupiter.api.AfterEach;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Random;
 
 /**
  * Zajedničko za testove pravila: H2 baza, timer isključen (app.timers.enabled=false),
@@ -51,9 +56,14 @@ abstract class GameTestSupport {
     @Autowired protected VoteRepository voteRepository;
 
     @Autowired protected ReclaimRequestRepository reclaimRequestRepository;
+    @Autowired protected TurnDurationRepository turnDurationRepository;
+    @Autowired protected TurnDurationService turnDurationService;
+    @Autowired protected GameRandom gameRandom;
 
     @AfterEach
     void cleanDatabase() {
+        gameRandom.reset();
+        turnDurationRepository.deleteAll();
         reclaimRequestRepository.deleteAll();
         gameActionRepository.deleteAll();
         voteRepository.deleteAll();
@@ -112,6 +122,35 @@ abstract class GameTestSupport {
         state.setPhaseEndsAt(OffsetDateTime.now().minusSeconds(1));
         gameStateRepository.save(state);
         gamePhaseService.handleTimeout(state.getId());
+    }
+
+    /**
+     * Glumi protok vremena: svi rokovi i početak poteza pomaknu se unatrag za duration,
+     * a zatim timer obradi stanje (ništa se ne dogodi ako stvarni kraj još nije stigao).
+     */
+    protected void elapse(Lobby lobby, Duration duration) {
+        GameState state = reload(lobby);
+        if (state.getPhaseEndsAt() != null) {
+            state.setPhaseEndsAt(state.getPhaseEndsAt().minus(duration));
+        }
+        if (state.getTurnStartedAt() != null) {
+            state.setTurnStartedAt(state.getTurnStartedAt().minus(duration));
+        }
+        if (state.getMafiaRunoffEndsAt() != null) {
+            state.setMafiaRunoffEndsAt(state.getMafiaRunoffEndsAt().minus(duration));
+        }
+        gameStateRepository.save(state);
+        gamePhaseService.handleTimeout(state.getId());
+    }
+
+    /** Predvidljiva slučajnost: GameRandom.pick uvijek uzme element s indeksom index */
+    protected void fixRandomPick(int index) {
+        gameRandom.use(new Random() {
+            @Override
+            public int nextInt(int bound) {
+                return index;
+            }
+        });
     }
 
     protected VoteResponse vote(Player voter, Player target) {
