@@ -248,6 +248,30 @@ class GameFlowIntegrationTests extends GameTestSupport {
     }
 
     @Test
+    void scatteredSingleVotesMeanNobodyLeavesWithoutTieBreak() {
+        Lobby lobby = lobby();
+        Player mafia = host(lobby, "Mafia");
+        List<Player> c = citizens(lobby, 4);
+        state(lobby, "VOTING", 1);
+
+        // svatko ima po jedan glas: bez ponovnog glasanja, nitko ne ispada
+        vote(mafia, c.get(0));
+        vote(c.get(0), c.get(1));
+        vote(c.get(1), c.get(2));
+        vote(c.get(2), c.get(3));
+        ResolveVoteResponse result = vote(c.get(3), mafia).getResolveResult();
+
+        assertEquals("NO_ELIMINATION", result.getResult());
+        assertEquals(List.of(), result.getTiedPlayerIds());
+        assertEquals(0, (int) result.getAbstainCount());
+        GameState state = reload(lobby);
+        assertEquals("NIGHT", state.getPhase());
+        assertEquals(2, state.getRoundNumber());
+        assertTrue(reload(mafia).getIsAlive());
+        c.forEach(p -> assertTrue(reload(p).getIsAlive()));
+    }
+
+    @Test
     void hostCanEndVotingEvenWithoutVotes() {
         Lobby lobby = lobby();
         Player host = host(lobby, "Mafia");

@@ -89,6 +89,10 @@ public final class GameRules {
     public static final String VOTE_ELIMINATED = "ELIMINATED";
     public static final String VOTE_TIE = "TIE";
     public static final String VOTE_NO_ELIMINATION = "NO_ELIMINATION";
+    /** Ponovno glasanje samo ako izjednačeni imaju barem toliko glasova; 1–1–1 je raspršeno i nitko ne ispada */
+    public static final int TIE_BREAK_MIN_VOTES = 2;
+    /** …i ako u njemu može glasati barem toliko igrača, da jedan igrač nikad sam ne odluči */
+    public static final int TIE_BREAK_MIN_VOTERS = 2;
 
     // ---------- uloge (imena iz tablice role) ----------
     public static final String MAFIA = "Mafia";

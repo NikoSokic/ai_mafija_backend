@@ -268,6 +268,10 @@ public class VoteService {
                     "Suzdržanih je bilo barem koliko i glasova za vodećeg. Danas nitko ne odlazi.");
         }
         if (leaders.size() > 1) {
+            if (top < TIE_BREAK_MIN_VOTES) {
+                return noElimination(lobby, gameState, List.of(), voteCounts, abstainCount,
+                        "Glasovi su se raspršili. Danas nitko ne odlazi.");
+            }
             return startTieBreak(lobby, gameState, leaders, voteCounts, abstainCount);
         }
         return eliminateByVote(lobby, gameState, leaders.getFirst(), voteCounts, abstainCount);
@@ -282,10 +286,10 @@ public class VoteService {
         gameState.setUpdateAt(now);
         gameStateRepository.save(gameState);
 
-        // svi živi su izjednačeni (ili utišani) – nema tko glasati
-        if (rules.eligibleVoters(lobby, gameState).isEmpty()) {
+        // izjednačeni i utišani ne glasaju: ako ostane manje od dvoje, jedan igrač ne odlučuje sam
+        if (rules.eligibleVoters(lobby, gameState).size() < TIE_BREAK_MIN_VOTERS) {
             return noElimination(lobby, gameState, tiedIds, voteCounts, abstainCount,
-                    "Izjednačenje se ne može razriješiti. Danas nitko ne odlazi.");
+                    "Premalo je igrača za ponovno glasanje. Danas nitko ne odlazi.");
         }
 
         ResolveVoteResponse response = new ResolveVoteResponse(
